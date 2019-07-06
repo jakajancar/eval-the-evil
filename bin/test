@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const child_process = require('child_process');
+const fs = require('fs');
 const net = require('net');
 const assert = require('assert');
 
@@ -111,55 +112,38 @@ const tests = [].concat(
 
 // Poor man's test runner
 async function main() {
+    process.stdout.write('Starting server...');
     const subprocess = child_process.spawn('build/eval-the-evil');
     process.on('exit', () => { subprocess.kill(); });
-    try {
-        process.stdout.write('Waiting for server...');
-        await waitForServer();
-        process.stdout.write(' done.\n');
-
-        process.stdout.write('Running tests\n');
-        for (const {title, func} of tests) {
-            process.stdout.write(`  - ${title}...`);
-            try {
-                const start = +new Date;
-                await func();
-                const duration = new Date - start;
-                process.stdout.write(` \x1b[32mpass\x1b[0m in ${duration} ms\n`);
-            } catch (e) {
-                process.stdout.write(` \x1b[31mfail\x1b[0m\n`);
-                console.error(e.stack);
-                process.exit(1);
-            }
-        }
-
-        process.stdout.write('All tests passed.\n');
-        process.exit(0);
-    } finally {
-        subprocess.kill();
+    while (!somebodyListeningOnPort(3825)) {
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
+    process.stdout.write(' done.\n');
+
+    process.stdout.write('Running tests\n');
+    for (const {title, func} of tests) {
+        process.stdout.write(`  - ${title}...`);
+        try {
+            const start = +new Date;
+            await func();
+            const duration = new Date - start;
+            process.stdout.write(` \x1b[32mpass\x1b[0m in ${duration} ms\n`);
+        } catch (e) {
+            process.stdout.write(` \x1b[31mfail\x1b[0m\n`);
+            console.error(e.stack);
+            process.exit(1);
+        }
+    }
+    process.stdout.write('All tests passed.\n');
+    process.exit(0);
 }
 
 main();
 
-async function waitForServer() {
-    function attempt() {
-        return new Promise(function(resolve, reject) {
-            const socket = new net.Socket();
-            socket.connect(3825, '127.0.0.1', () => { socket.destroy(); resolve(); });
-            socket.on('error', reject);
-        });
-    }
-
-    while (true) {
-        try {
-            await attempt();
-            break;
-        } catch (e) {
-            if (e.code != 'ECONNREFUSED')
-                throw e;
-        }
-    }
+function somebodyListeningOnPort(port) {
+    const hex = (port).toString(16).toUpperCase().padStart(4, 0);
+    return fs.readFileSync('/proc/net/tcp', 'utf-8').split('\n')
+        .filter(x => x.match('^\\s*\\d+:\\s+\\d+:' + hex + ' ')).length > 0;
 }
 
 function call(request, raw = false) {
