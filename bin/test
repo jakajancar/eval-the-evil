@@ -34,7 +34,7 @@ const tests = [].concat(
     [{title: `Returns correct error if request is not JSON`, func: async () => {
         assert.deepStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
     }}],
-    ["hello world", 42, true, null, /* [] todo */].map( value => (
+    ["hello world", 42, true, null, []].map( value => (
         {title: `Returns correct error if request is not an object (${JSON.stringify(value)})`, func: async () => {
             assert.deepStrictEqual(await call(value), {status: 'bad_request', detail: "Request is not an object."});
         }}

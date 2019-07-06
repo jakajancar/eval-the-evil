@@ -147,7 +147,7 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
       if (!v8::JSON::Parse(user_context, request_string).ToLocal(&request_value))
         return error_response(isolate, safe_context, "bad_request", v8_istr("Request is not valid JSON."));
 
-      if (!request_value->IsObject())
+      if (!request_value->IsObject() || request_value->IsArray())
         return error_response(isolate, safe_context, "bad_request", v8_istr("Request is not an object."));
       v8::Local<v8::Object> request_object = v8::Local<v8::Object>::Cast(request_value);
 
