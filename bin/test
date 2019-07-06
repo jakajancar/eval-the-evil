@@ -138,7 +138,15 @@ const tests = [].concat(
 // Poor man's test runner
 async function main() {
     process.stdout.write('Starting server...');
-    const subprocess = child_process.spawn('build/eval-the-evil');
+    const subprocess = child_process.spawn('build/eval-the-evil', [], {stdio: ['ignore', 'inherit', 'inherit']});
+    subprocess.on('exit', (code, signal) => {
+        if (code) {
+            console.error(`eval-the-evil exited with code ${code}`);
+        } else {
+            console.error(`eval-the-evil was terminated due to signal ${signal}`);
+        }
+        process.exit(1);
+    });
     process.on('exit', () => { subprocess.kill(); });
     while (!somebodyListeningOnPort(3825)) {
         await new Promise(resolve => setTimeout(resolve, 100));
