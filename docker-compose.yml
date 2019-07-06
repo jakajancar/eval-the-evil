@@ -1,0 +1,11 @@
+version: "3"
+services:
+  dev-env:
+    build: .
+    environment:
+      - TERM # to get colors
+    volumes:
+      - ./bin:/root/eval-the-evil/bin:ro
+      - ./src:/root/eval-the-evil/src:ro
+    working_dir: /root/eval-the-evil
+    command: sleep infinity

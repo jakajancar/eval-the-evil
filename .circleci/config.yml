@@ -1,0 +1,46 @@
+version: 2.1
+
+jobs:
+  build:
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore cached image of development environment (download from storage)
+          keys:
+            - dev-env-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Branch }}-
+            - dev-env-v1-{{ .Environment.CIRCLE_JOB }}-master-
+      - run:
+          name: Restore cached image of development environment (load into docker)
+          command: |
+            if [ -e /tmp/dev-env.dockerimage ]
+            then
+                docker load -i /tmp/dev-env.dockerimage
+            fi
+      - run:
+          name: Update development environment image
+          command: |
+            docker-compose build
+      - run:
+          name: Start development environment
+          command: |
+            # just sleeps, but it needs to run for commands to be executed
+            docker-compose up -d
+      - run:
+          name: Build app
+          command: |
+            docker-compose exec dev-env bin/build
+      - run:
+          name: Run tests
+          command: |
+            docker-compose exec dev-env bin/test
+      - run:
+          name: Save image of development environment into cache (save from docker)
+          command: |
+            docker save -o /tmp/dev-env.dockerimage project_dev-env
+      - save_cache:
+          name: Save image of development environment into cache (upload to storage)
+          key: dev-env-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Branch }}-{{ epoch }}
+          paths:
+            - /tmp/dev-env.dockerimage
