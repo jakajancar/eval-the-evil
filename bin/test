@@ -5,6 +5,31 @@ const net = require('net');
 const assert = require('assert');
 
 const tests = [].concat(
+    /***** Binary compatibilites *****/
+    [{title: `Binary is linked only against very common dynamic libraries`, func: async () => {
+        // These are what node.js uses (from node-v10.16.0-linux-x64).
+        // If it's good enough for them, it's good enough for us.
+        const nodeJsLibs = [
+            'linux-vdso.so.1',
+            'libdl.so.2',
+            'librt.so.1',
+            'libstdc++.so.6',
+            'libm.so.6',
+            'libgcc_s.so.1',
+            'libpthread.so.0',
+            'libc.so.6',
+            '/lib64/ld-linux-x86-64.so.2',
+        ];
+
+        const result = child_process.spawnSync('ldd', ['build/eval-the-evil']);
+        assert(result.status === 0);
+
+        const ourLibs = result.stdout.toString().trim().split('\n').map(x => x.trim().split(' ')[0]);
+        for (const lib of ourLibs) {
+            assert(nodeJsLibs.indexOf(lib) !== -1, `We require ${lib}, which node.js does not.`);
+        }
+    }}],
+
     /***** Bad request errors *****/
     [{title: `Returns correct error if request is not JSON`, func: async () => {
         assert.deepStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
