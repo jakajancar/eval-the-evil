@@ -8,4 +8,5 @@ services:
       - ./bin:/root/eval-the-evil/bin:ro
       - ./src:/root/eval-the-evil/src:ro
     working_dir: /root/eval-the-evil
-    command: sleep infinity
+    command: |
+      bash -c 'echo "Sleeping forever. Use exec or override command."; sleep infinity'

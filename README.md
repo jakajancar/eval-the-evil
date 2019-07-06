@@ -10,7 +10,7 @@
 
  2. (Re-)build and enter the development environment:
 
-        docker-compose build && docker-compose run --rm dev-env
+        docker-compose run dev-env bash
 
  3. Inside the container:
       - `bin/build` to build, binary will be placed into `build/`
