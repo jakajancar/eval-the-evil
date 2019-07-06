@@ -116,6 +116,25 @@ const tests = [].concat(
         }}
     )),
 
+    /***** ICU *****/
+
+    [{title: `i18n works as expected`, func: async () => {
+        // ICU is currently disabled, so we just check that there isn't a crash.
+        // Should be easy to enable if ever needed.
+        const ICU_ENABLED = false;
+
+        // Date stuff works either way, just a little crippled
+        assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
+        assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
+
+        // Intl is completely unavailable
+        assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
+        if (ICU_ENABLED) {
+            assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
+            assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
+        }
+    }}],
+
     /***** Performance *****/
     // TODO: do 100k for a real stress test
     [{title: `Handles 100 requests in series`, func: async () => {

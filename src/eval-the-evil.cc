@@ -25,8 +25,6 @@ v8::Local<v8::String> trycatch_to_detail(v8::Isolate *isolate, v8::Local<v8::Con
 int main(int argc, char *argv[])
 {
   // Initialize V8.
-  v8::V8::InitializeICUDefaultLocation(argv[0]);
-  v8::V8::InitializeExternalStartupData(argv[0]);
   std::unique_ptr<v8::Platform> platform = v8::platform::NewDefaultPlatform();
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();

@@ -27,12 +27,20 @@ RUN cd /root/v8/v8 && gclient sync
 
 # Prepare config and build
 RUN apt-get -y install libglib2.0-dev
-RUN cd /root/v8/v8 && tools/dev/v8gen.py x64.release.sample
-RUN cd /root/v8/v8 && ninja -C out.gn/x64.release.sample v8_monolith
+#RUN cd /root/v8/v8 && tools/dev/v8gen.py x64.release.sample # we use custom below, to disable ICU
+RUN cd /root/v8/v8 && gn gen out.gn/x64.eval-the-evil --args='\
+    is_component_build=false \
+    is_debug=false \
+    target_cpu="x64" \
+    use_custom_libcxx=false \
+    v8_monolithic=true \
+    v8_use_external_startup_data=false \
+    v8_enable_i18n_support=false'
+RUN cd /root/v8/v8 && ninja -C out.gn/x64.eval-the-evil v8_monolith
 
 # "Install" artifacts
 RUN cd /root/v8/v8 && cp -R include/v8*.h include/libplatform /usr/local/include
-RUN cd /root/v8/v8 && cp out.gn/x64.release.sample/obj/libv8_*.a /usr/local/lib
+RUN cd /root/v8/v8 && cp out.gn/x64.eval-the-evil/obj/libv8_*.a /usr/local/lib
 
 ########## Eval the Evil ##########
 
