@@ -38,7 +38,7 @@ jobs:
       - run:
           name: Save image of development environment into cache (save from docker)
           command: |
-            docker save -o /tmp/dev-env.dockerimage project_dev-env
+            docker save -o /tmp/dev-env.dockerimage eval-the-evil_dev-env
       - save_cache:
           name: Save image of development environment into cache (upload to storage)
           key: dev-env-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Branch }}-{{ epoch }}

@@ -1,7 +1,13 @@
-version: "3"
+version: "3.7"
 services:
   dev-env:
-    build: .
+    # set explicitly in case dir/project name is different
+    image: eval-the-evil_dev-env
+    build:
+      context: .
+      cache_from:
+        # use image by the same name as cache, when reloaded on CircleCI
+        - eval-the-evil_dev-env
     environment:
       - TERM # to get colors
     volumes:
