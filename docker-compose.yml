@@ -13,6 +13,8 @@ services:
     volumes:
       - ./bin:/root/eval-the-evil/bin:ro
       - ./src:/root/eval-the-evil/src:ro
+    ports:
+      - 3825:3825
     working_dir: /root/eval-the-evil
     command: |
       bash -c 'echo "Sleeping forever. Use exec or override command."; sleep infinity'
