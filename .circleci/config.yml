@@ -36,6 +36,13 @@ jobs:
           command: |
             docker-compose exec dev-env bin/test
       - run:
+          name: Create a release
+          command: |
+            if [ -n "$CIRCLE_TAG" ]
+            then
+                docker-compose exec dev-env ghr -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -delete ${CIRCLE_TAG} build/
+            fi
+      - run:
           name: Save image of development environment into cache (save from docker)
           command: |
             docker save -o /tmp/dev-env.dockerimage eval-the-evil_dev-env
@@ -44,3 +51,12 @@ jobs:
           key: dev-env-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Branch }}-{{ epoch }}
           paths:
             - /tmp/dev-env.dockerimage
+
+workflows:
+  version: 2
+  main:
+    jobs:
+      - build:
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+$/ # runs for all branches *and* matching tags

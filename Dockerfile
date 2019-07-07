@@ -44,5 +44,15 @@ RUN cd /root/v8/v8 && cp out.gn/x64.eval-the-evil/obj/libv8_*.a /usr/local/lib
 
 ########## Eval the Evil ##########
 
-# System dependencies
+# Build dependencies
 RUN apt-get -y install clang libboost-system1.67.0 libboost-system1.67-dev nodejs
+
+# ghr is used for uploading release artifacts
+RUN cd /tmp && \
+    curl -fsSLO https://github.com/tcnksm/ghr/releases/download/v0.12.1/ghr_v0.12.1_linux_amd64.tar.gz && \
+    tar xf ghr_*.tar.gz && \
+    mv ghr_*/ghr /usr/local/bin/ && \
+    rm -rf ghr_*
+
+# Development tools
+RUN apt-get -y install netcat-openbsd procps

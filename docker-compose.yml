@@ -10,6 +10,7 @@ services:
         - eval-the-evil_dev-env
     environment:
       - TERM # to get colors
+      - GITHUB_TOKEN # for ghr/uploading release artifacts
     volumes:
       - ./bin:/root/eval-the-evil/bin:ro
       - ./src:/root/eval-the-evil/src:ro
