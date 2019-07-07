@@ -11,11 +11,13 @@
 #include <iostream>
 #include <thread>
 
+#include <boost/program_options.hpp>
 #include <boost/asio.hpp>
 
 #include <libplatform/libplatform.h>
 #include <v8.h>
 
+namespace po = boost::program_options;
 using boost::asio::ip::tcp;
 
 v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, std::string *request_blob);
@@ -24,15 +26,30 @@ v8::Local<v8::String> trycatch_to_detail(v8::Isolate *isolate, v8::Local<v8::Con
 
 int main(int argc, char *argv[])
 {
+  // Process arguments
+  int port;
+  int num_threads;
+  po::options_description desc("Allowed options");
+  desc.add_options()
+      ("help", "produce help message")
+      ("port", po::value<int>(&port)->default_value(3825), "port to listen on")
+      ("threads", po::value<int>(&num_threads)->default_value(std::thread::hardware_concurrency()), "number of threads (defaults to hardware concurrency)")
+  ;
+  po::variables_map vm;
+  po::store(po::parse_command_line(argc, argv, desc), vm);
+  po::notify(vm);
+  if (vm.count("help")) {
+      std::cout << desc << "\n";
+      return 1;
+  }
+
   // Initialize V8.
   std::unique_ptr<v8::Platform> platform = v8::platform::NewDefaultPlatform();
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
-  int port = 3825;
-  int num_threads = std::thread::hardware_concurrency();
+  // Start threads
   std::thread threads[num_threads];
-
   for (int i = 0; i < num_threads; i++) {
     threads[i] = std::thread([port]{
       // Listen for TCP connections.

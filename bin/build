@@ -7,4 +7,5 @@ clang++ src/eval-the-evil.cc -o build/eval-the-evil \
     -pthread \
     -lstdc++ \
     -l:libv8_monolith.a \
+    -l:libboost_program_options.a \
     -l:libboost_system.a

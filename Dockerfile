@@ -44,8 +44,14 @@ RUN cd /root/v8/v8 && cp out.gn/x64.eval-the-evil/obj/libv8_*.a /usr/local/lib
 
 ########## Eval the Evil ##########
 
-# Build dependencies
-RUN apt-get -y install clang libboost-system1.67.0 libboost-system1.67-dev nodejs
+# Build & test dependencies
+RUN apt-get -y install \
+    clang \
+    libboost-program-options1.67.0 \
+    libboost-program-options1.67-dev \
+    libboost-system1.67.0 \
+    libboost-system1.67-dev \
+    nodejs
 
 # ghr is used for uploading release artifacts
 RUN cd /tmp && \
