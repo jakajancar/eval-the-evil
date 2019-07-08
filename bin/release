@@ -1,0 +1,29 @@
+#!/bin/bash
+set -eu -o pipefail
+cd "$(dirname $0)/.."
+
+if [ $# -ne 2 ]
+then
+    echo "Usage: $0 <sha1> <version>" >&2
+    exit 1
+fi
+SHA1=$1
+VERSION=$2
+if [ "${VERSION:0:1}" != "v" ]
+then
+    echo "$0: version must start with 'v'" >&2
+    exit 1
+fi
+
+cd build
+rm -rf artifacts; mkdir artifacts
+
+# Create .tar.xz package
+PACKAGE_NAME=eval-the-evil-${VERSION}-linux-amd64
+rm -rf $PACKAGE_NAME; mkdir $PACKAGE_NAME
+cp eval-the-evil ../LICENSE.md $PACKAGE_NAME
+tar -cJf $PACKAGE_NAME.tar.xz $PACKAGE_NAME
+mv $PACKAGE_NAME.tar.xz artifacts
+
+# Upload to GitHub
+ghr -u jakajancar -r eval-the-evil -c $SHA1 -delete $VERSION artifacts
