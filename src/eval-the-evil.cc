@@ -224,6 +224,8 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
 // TODO: remove isolate parameter
 v8::Local<v8::String> error_response(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, const char *status, v8::Local<v8::String> detail)
 {
+  v8::Context::Scope context_scope(safe_context);
+
   v8::Local<v8::Object> response = v8::Object::New(isolate);
   response->Set(safe_context, v8_istr("status"), v8_istr(status)).ToChecked();
   response->Set(safe_context, v8_istr("detail"), detail).ToChecked();

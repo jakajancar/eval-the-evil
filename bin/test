@@ -161,6 +161,17 @@ async function main() {
                 assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
             }
         });
+
+        await test(`toJSON() executes in user's context`, async () => {
+            assert.deepStrictEqual(await call({code: `global.foo = 'bar'; return {toJSON: function() { return foo; }}`, context: {}}), {status: 'success', return_value: 'bar'});
+        });
+
+        await test(`toJSON() cannot be used to break top-level response context`, async () => {
+            const response = await call({code: `Object.prototype.toJSON = function() { return 'KABOOM, interfered with top-level Stringify!'; }; throw 'benign error from code';`, context: {}});
+            assert.equal(typeof response, 'object');
+            assert.equal(response.status, 'code_error');
+            assert(response.detail.indexOf('benign error from code') !== -1);
+        });
     });
 
     async function work(call, i) {
