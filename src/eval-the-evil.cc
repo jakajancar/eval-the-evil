@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
       delete create_params.array_buffer_allocator;
     }); // thread
   }
-  printf("evil_the_eval listening on port %d.\n", port);
+  printf("eval-the-evil listening on port %d.\n", port);
 
   // Wait for threads to exit
   for (auto &thread : threads) {
