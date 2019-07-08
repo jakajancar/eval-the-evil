@@ -4,9 +4,11 @@ const fs = require('fs');
 const net = require('net');
 const assert = require('assert');
 
-const tests = [].concat(
-    /***** Binary compatibilites *****/
-    [{title: `Binary is linked only against very common dynamic libraries`, func: async () => {
+main();
+
+async function main() {
+    process.stdout.write('Running tests\n');
+    await test(`Binary is linked only against very common dynamic libraries`, async () => {
         // These are what node.js uses (from node-v10.16.0-linux-x64).
         // If it's good enough for them, it's good enough for us.
         const nodeJsLibs = [
@@ -28,183 +30,262 @@ const tests = [].concat(
         for (const lib of ourLibs) {
             assert(nodeJsLibs.indexOf(lib) !== -1, `We require ${lib}, which node.js does not.`);
         }
-    }}],
-
-    /***** Bad request errors *****/
-    [{title: `Returns correct error if request is not JSON`, func: async () => {
-        assert.deepStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
-    }}],
-    ["hello world", 42, true, null, []].map( value => (
-        {title: `Returns correct error if request is not an object (${JSON.stringify(value)})`, func: async () => {
-            assert.deepStrictEqual(await call(value), {status: 'bad_request', detail: "Request is not an object."});
-        }}
-    )),
-    [{title: `Returns correct error if code is missing`, func: async () => {
-        assert.deepStrictEqual(await call({context: {}}), {status: 'bad_request', detail: "Missing 'code' parameter or it is not a string."});
-    }}],
-    [{title: `Returns correct error if code is missing`, func: async () => {
-        assert.deepStrictEqual(await call({context: {}}), {status: 'bad_request', detail: "Missing 'code' parameter or it is not a string."});
-    }}],
-    [{title: `Returns correct error if context is missing`, func: async () => {
-        assert.deepStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
-    }}],
-
-    /***** Computation *****/
-    [{title: `Computes 1 (code) + 1 (context)`, func: async () => {
-        assert.deepStrictEqual(await call({code: 'return 1+i', context: {i: 1}}), {status: 'success', return_value: 2});
-    }}],
-
-    /***** Environment *****/
-    [{title: `Provides a 'global' object self-reference`, func: async () => {
-        assert.deepStrictEqual(await call({code: 'x = 1; return global.x + 1', context: {}}), {status: 'success', return_value: 2});
-    }}],
-    [{title: `User-provided context overrides implicit context`, func: async () => {
-        assert.deepStrictEqual(await call({code: 'return global === 42', context: {global: 42}}), {status: 'success', return_value: true});
-    }}],
-    [{title: `Does not provide async functions in scope`, func: async () => {
-        assert.deepStrictEqual(await call({code: 'return typeof setTimeout === "undefined" && typeof setInterval === "undefined"', context: {}}), {status: 'success', return_value: true});
-    }}],
-
-    /***** Code error handling *****/
-    [{title: `Returns parse errors`, func: async () => {
-        const code = 'hello!';
-        const detail = [
-            `Uncaught SyntaxError: Unexpected token ! [<user-code>:1]`,
-            '',
-            `Stack trace:`,
-            `SyntaxError: Unexpected token !`,
-        ].join('\n');
-        assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
-    }}],
-    [{title: `Returns only user frames when throwing an error`, func: async () => {
-        const code = 'function foo() { throw new Error("my message") }; foo();';
-        const detail = [
-            'Uncaught Error: my message [<user-code>:1]',
-            '',
-            'Stack trace:',
-            'Error: my message',
-            '    at foo (<user-code>:1:24)',
-            '    at <user-code>:1:51'
-        ].join('\n');
-        assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
-    }}],
-    [{title: `Returns sensible error when throwing null`, func: async () => {
-        const code = 'throw null';
-        const detail = [
-            'Uncaught null [<user-code>:1]',
-            '',
-            'Stack trace:',
-            '<no stack trace>'
-        ].join('\n');
-        assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
-    }}],
-    [{title: `Returns sensible error when throwing random unserializable object`, func: async () => {
-        const code = 'throw Math';
-        const detail = [
-            'Uncaught #<Object> [<user-code>:1]',
-            '',
-            'Stack trace:',
-            '<no stack trace>'
-        ].join('\n');
-        assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
-    }}],
-
-    /***** Data type support *****/
-    ["hello world", "😬", 42, 1e9, 1.7, true, false, null, [], [1,2,3], {}, {a: 1, b: {}, c: []}].map( value => (
-        {title: `Can round-trip any datatype from json.org (${JSON.stringify(value)})`, func: async () => {
-            assert.deepStrictEqual(await call({code: 'return foo', context: {foo: value}}), {status: 'success', return_value: value});
-        }}
-    )),
-
-    /***** ICU *****/
-
-    [{title: `i18n works as expected`, func: async () => {
-        // ICU is currently disabled, so we just check that there isn't a crash.
-        // Should be easy to enable if ever needed.
-        const ICU_ENABLED = false;
-
-        // Date stuff works either way, just a little crippled
-        assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
-        assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
-
-        // Intl is completely unavailable
-        assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
-        if (ICU_ENABLED) {
-            assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
-            assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
-        }
-    }}],
-
-    /***** Performance *****/
-    // TODO: do 100k for a real stress test
-    [{title: `Handles 100 requests in series`, func: async () => {
-        for (let i = 0; i < 100; i++) {
-            assert.deepStrictEqual(await call({code: `return i + ${i}`, context: {i: i}}), {status: 'success', return_value: 2*i});
-        }
-    }}],
-    [{title: `Handles 100 requests in parallel`, func: async () => {
-        let promises = [];
-        for (let i = 0; i < 100; i++) {
-            const expected = {status: 'success', return_value: 2*i};
-            const promise = call({code: `return i + ${i}`, context: {i: i}})
-                            .then((actual) => { assert.deepStrictEqual(actual, expected); } );
-            promises.push(promise);
-        }
-        return Promise.all(promises);
-    }}],
-);
-
-// Poor man's test runner
-async function main() {
-    process.stdout.write('Starting server...');
-    const subprocess = child_process.spawn('build/eval-the-evil', [], {stdio: ['ignore', 'inherit', 'inherit']});
-    subprocess.on('exit', (code, signal) => {
-        if (code) {
-            console.error(`eval-the-evil exited with code ${code}`);
-        } else {
-            console.error(`eval-the-evil was terminated due to signal ${signal}`);
-        }
-        process.exit(1);
     });
-    process.on('exit', () => { subprocess.kill(); });
-    while (!somebodyListeningOnPort(3825)) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    process.stdout.write(' done.\n');
 
-    process.stdout.write('Running tests\n');
-    for (const {title, func} of tests) {
-        process.stdout.write(`  - ${title}...`);
-        try {
+    // Behavior tests share the same instance, and do not restart it
+    await withServerProcess([], async (call) => {
+        await group(`Bad request handling`, async () => {
+
+            await test(`Returns correct error if request is not JSON`, async () => {
+                assert.deepStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
+            });
+
+            await group(`Returns correct error if request is not an object`, async () => {
+                for (value of ["hello world", 42, true, null, []]) {
+                    await test(JSON.stringify(value), async () => {
+                        assert.deepStrictEqual(await call(value), {status: 'bad_request', detail: "Request is not an object."});
+                    });
+                }
+            });
+
+            await test(`Returns correct error if code is missing`, async () => {
+                assert.deepStrictEqual(await call({context: {}}), {status: 'bad_request', detail: "Missing 'code' parameter or it is not a string."});
+            });
+
+            await test(`Returns correct error if context is missing`, async () => {
+                assert.deepStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
+            });
+        });
+
+        await test(`Computes 1 (code) + 1 (context)`, async () => {
+            assert.deepStrictEqual(await call({code: 'return 1+i', context: {i: 1}}), {status: 'success', return_value: 2});
+        });
+
+        await group(`Environment`, async () => {
+            await test(`Provides a 'global' object self-reference`, async () => {
+                assert.deepStrictEqual(await call({code: 'x = 1; return global.x + 1', context: {}}), {status: 'success', return_value: 2});
+            });
+
+            await test(`User-provided context overrides implicit context`, async () => {
+                assert.deepStrictEqual(await call({code: 'return global === 42', context: {global: 42}}), {status: 'success', return_value: true});
+            });
+
+            await test(`Does not provide async functions in scope`, async () => {
+                assert.deepStrictEqual(await call({code: 'return typeof setTimeout === "undefined" && typeof setInterval === "undefined"', context: {}}), {status: 'success', return_value: true});
+            });
+        });
+
+        await group(`Code error handling`, async () => {
+            await test(`Returns parse errors`, async () => {
+                const code = 'hello!';
+                const detail = [
+                    `Uncaught SyntaxError: Unexpected token ! [<user-code>:1]`,
+                    '',
+                    `Stack trace:`,
+                    `SyntaxError: Unexpected token !`,
+                ].join('\n');
+                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+            });
+
+            await test(`Returns only user frames when throwing an error`, async () => {
+                const code = 'function foo() { throw new Error("my message") }; foo();';
+                const detail = [
+                    'Uncaught Error: my message [<user-code>:1]',
+                    '',
+                    'Stack trace:',
+                    'Error: my message',
+                    '    at foo (<user-code>:1:24)',
+                    '    at <user-code>:1:51'
+                ].join('\n');
+                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+            });
+
+            await test(`Returns sensible error when throwing null`, async () => {
+                const code = 'throw null';
+                const detail = [
+                    'Uncaught null [<user-code>:1]',
+                    '',
+                    'Stack trace:',
+                    '<no stack trace>'
+                ].join('\n');
+                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+            });
+
+            await test(`Returns sensible error when throwing random unserializable object`, async () => {
+                const code = 'throw Math';
+                const detail = [
+                    'Uncaught #<Object> [<user-code>:1]',
+                    '',
+                    'Stack trace:',
+                    '<no stack trace>'
+                ].join('\n');
+                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+            });
+        });
+
+        await group(`Can round-trip any datatype from json.org`, async () => {
+            for (value of ["hello world", "😬", 42, 1e9, 1.7, true, false, null, [], [1,2,3], {}, {a: 1, b: {}, c: []}]) {
+                await test(JSON.stringify(value), async () => {
+                    assert.deepStrictEqual(await call({code: 'return foo', context: {foo: value}}), {status: 'success', return_value: value});
+                });
+            }
+        });
+
+        await test(`i18n works as expected`, async() => {
+            // ICU is currently disabled, so we just check that there isn't a crash.
+            // Should be easy to enable if ever needed.
+            const ICU_ENABLED = false;
+
+            // Date stuff works either way, just a little crippled
+            assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
+            assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
+
+            // Intl is completely unavailable
+            assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
+            if (ICU_ENABLED) {
+                assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
+                assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
+            }
+        });
+    });
+
+    async function work(call, i) {
+        assert.deepStrictEqual(await call({code: `return i + ${i}`, context: {i: i}}), {status: 'success', return_value: 2*i});
+    }
+
+    await withServerProcess(['--threads', 1], async (call) => {
+        await test(`Performance is as expected (warmup)`, async () => {
+            for (let i = 0; i < 1000; i++) {
+                await work(call, i);
+            }
+        });
+
+        await test(`Performance is as expected`, async () => {
+            for (let i = 1000; i < 2000; i++) {
+                await work(call, i);
+            }
+        });
+    });
+
+    await withServerProcess(['--threads', 1], async (call, subprocess) => {
+        await test(`Memory usage is stable`, async () => {
+            function getHighWaterMark() {
+                const s = fs.readFileSync(`/proc/${subprocess.pid}/status`, 'utf-8').split('\n')
+                    .map(x => x.match(/^VmHWM:\s*(\d+) kB\s*$/)).filter(x => x)[0][1];
+                return parseInt(s, 10);
+            }
+
+            const TIMEOUT = 10000;
+            const VALIDATION_REQS = 100;
             const start = +new Date;
-            await func();
-            const duration = new Date - start;
-            process.stdout.write(` \x1b[32mpass\x1b[0m in ${duration} ms\n`);
-        } catch (e) {
-            process.stdout.write(` \x1b[31mfail\x1b[0m\n`);
-            console.error(e.stack);
-            process.exit(1);
+            var curHwm = 0;
+            var curHwmFirstIteration;
+            for (let i = 0; true; i++) {
+                const timeElapsed = +new Date - start
+                assert(timeElapsed <= TIMEOUT, `Did not stabilize in ${TIMEOUT} ms.`);
+                await work(call, i);
+                const newHwm = getHighWaterMark();
+                assert(newHwm >= curHwm, `High water mark *decreased* from ${curHwm} to ${newHwm} ?!`);
+                if (newHwm > curHwm) {
+                    curHwm = newHwm;
+                    curHwmFirstIteration = i;
+                }
+
+                if (i - curHwmFirstIteration == VALIDATION_REQS) {
+                    process.stdout.write(` [high water mark stabilized at ${curHwm} kB after ${curHwmFirstIteration+1} iterations (took ${timeElapsed} ms) and is holding ${VALIDATION_REQS} requests later]`);
+                    break;
+                }
+            }
+        });
+    });
+
+    process.stdout.write('All tests passed.\n');
+};
+
+async function test(title, bodyFunc) {
+    global.depth = (global.depth || 0) + 1;
+    process.stdout.write('    '.repeat(depth-1) + (depth == 1 ? '  - ' : ' `- ') + title + ' ...');
+    try {
+        const start = +new Date;
+        await bodyFunc();
+        const duration = new Date - start;
+        process.stdout.write(` \x1b[32mpass\x1b[0m in ${duration} ms\n`);
+    } catch (e) {
+        process.stdout.write(` \x1b[31mfail\x1b[0m\n`);
+        console.error(e.stack);
+        process.exit(1);
+    } finally {
+        depth--;
+    }
+}
+
+async function group(title, bodyFunc) {
+    global.depth = (global.depth || 0) + 1;
+    process.stdout.write('    '.repeat(depth-1) + (depth == 1 ? '  - ' : ' `- ') + title + ':\n');
+    try {
+        await bodyFunc();
+    } finally {
+        depth--;
+    }
+}
+
+async function withServerProcess(args, f) {
+    // Ensure current process has no children running (nesting, missing cleanup...)
+    assert(!process.hasServer);
+    process.hasServer = true;
+
+    // Ensure no unaccounted-for process
+    assert(!somebodyListeningOnPort())
+
+    // Launch the process
+    const subprocess = child_process.spawn('build/eval-the-evil', args, {stdio: ['ignore', 'ignore', 'inherit']});
+
+    // If node exits uncleanly, finally{} will not be called.
+    function nodeCrashListener() { subprocess.kill(); }
+    process.on('exit', nodeCrashListener);
+
+    // For unexpected exits, we want to print the status to console.
+    function subprocessExitListener(code, signal) {
+        if (code)
+            throw new Error(`eval-the-evil exited with code ${code}`);
+        else
+            throw new Error(`eval-the-evil was terminated due to signal ${signal}`);
+    }
+    subprocess.on('exit', subprocessExitListener);
+
+    try {
+        // Wait until listening
+        while (!somebodyListeningOnPort()) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        // Run function
+        return await f(call, subprocess);
+    } finally {
+        subprocess.off('exit', subprocessExitListener);
+        subprocess.kill();
+        process.off('exit', nodeCrashListener);
+        process.hasServer = false;
+        // Wait until unbound.
+        while (somebodyListeningOnPort()) {
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
     }
-    process.stdout.write('All tests passed.\n');
-    process.exit(0);
-}
 
-main();
+    function somebodyListeningOnPort(port) {
+        const hex = (3825).toString(16).toUpperCase().padStart(4, 0);
+        return fs.readFileSync('/proc/net/tcp', 'utf-8').split('\n')
+            .filter(x => x.match('^\\s*\\d+:\\s+\\d+:' + hex + ' ')).length > 0;
+    }
 
-function somebodyListeningOnPort(port) {
-    const hex = (port).toString(16).toUpperCase().padStart(4, 0);
-    return fs.readFileSync('/proc/net/tcp', 'utf-8').split('\n')
-        .filter(x => x.match('^\\s*\\d+:\\s+\\d+:' + hex + ' ')).length > 0;
-}
-
-function call(request, raw = false) {
-    return new Promise(function(resolve, reject) {
-        let buffer = '';
-        const socket = new net.Socket();
-        socket.connect(3825, '127.0.0.1', () => { socket.end(raw ? request : JSON.stringify(request)); });
-        socket.on('data', (chunk) => { buffer+= chunk; });
-        socket.on('end', () => { resolve(JSON.parse(buffer)); });
-        socket.on('error', reject);
-    });
+    async function call(request, raw = false) {
+        return new Promise(function(resolve, reject) {
+            let buffer = '';
+            const socket = new net.Socket();
+            socket.connect(3825, '127.0.0.1', () => { socket.end(raw ? request : JSON.stringify(request)); });
+            socket.on('data', (chunk) => { buffer+= chunk; });
+            socket.on('end', () => { resolve(JSON.parse(buffer)); });
+            socket.on('error', reject);
+        });
+    }
 }
