@@ -32,7 +32,7 @@ int main(int argc, char *argv[])
   po::options_description desc("Allowed options");
   desc.add_options()
       ("help", "produce help message")
-      ("port", po::value<int>(&port)->default_value(3825), "port to listen on")
+      ("port", po::value<int>(&port)->default_value(1101), "port to listen on")
       ("threads", po::value<int>(&num_threads)->default_value(std::thread::hardware_concurrency()), "number of threads (defaults to hardware concurrency)")
   ;
   po::variables_map vm;
