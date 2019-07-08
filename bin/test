@@ -131,6 +131,20 @@ async function main() {
             }
         });
 
+        await group('JSON.serialize(...) === undefined weirdness', async () => {
+            await test(`Returns null if user code returns undefined.`, async () => {
+                assert.deepStrictEqual(await call({code: `return undefined`, context: {}}), {status: 'success', return_value: null});
+            });
+
+            await test(`Returns null if user code returns function.`, async () => {
+                assert.deepStrictEqual(await call({code: `return function() {}`, context: {}}), {status: 'success', return_value: null});
+            });
+
+            await test(`Returns null if user code returns undefined in toJSON().`, async () => {
+                assert.deepStrictEqual(await call({code: `return {toJSON: function() { return undefined; }}`, context: {}}), {status: 'success', return_value: null});
+            });
+        });
+
         await test(`i18n works as expected`, async() => {
             // ICU is currently disabled, so we just check that there isn't a crash.
             // Should be easy to enable if ever needed.

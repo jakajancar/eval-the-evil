@@ -201,10 +201,16 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
       return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
 
     // Serialize the result
-    if (retval->IsUndefined())
-      retval = v8::Null(isolate); // stringify returns undefined for undefined :/
     if (!v8::JSON::Stringify(user_context, retval).ToLocal(&retval_string))
       return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
+
+    // Stringify may return `undefined` in several cases, which is clearly not
+    // valid JSON. Fix that here.
+    if (retval_string->Length() == 9) { // convert to UTF-8 only if short
+      v8::String::Utf8Value utf8(isolate, retval_string);
+      if (utf8.length() == 9 && strcmp(*utf8, "undefined") == 0)
+        retval_string = v8_istr("null");
+    }
   }
 
   {
