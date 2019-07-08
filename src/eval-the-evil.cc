@@ -121,11 +121,11 @@ int main(int argc, char *argv[])
 }
 
 inline v8::Local<v8::String> v8_str(const char* string) {
-	return v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), string, v8::NewStringType::kNormal).ToLocalChecked();
+  return v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), string, v8::NewStringType::kNormal).ToLocalChecked();
 }
 
 inline v8::Local<v8::String> v8_istr(const char* string) {
-	return v8::String::NewFromOneByte(v8::Isolate::GetCurrent(), (const uint8_t*)string, v8::NewStringType::kInternalized).ToLocalChecked();
+  return v8::String::NewFromOneByte(v8::Isolate::GetCurrent(), (const uint8_t*)string, v8::NewStringType::kInternalized).ToLocalChecked();
 }
 
 template <size_t SIZE> v8::Local<v8::String> v8_concat(const v8::Local<v8::String> (&parts)[SIZE])
