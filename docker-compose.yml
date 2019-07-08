@@ -14,6 +14,7 @@ services:
     volumes:
       - ./bin:/root/eval-the-evil/bin:ro
       - ./src:/root/eval-the-evil/src:ro
+      - ./tests:/root/eval-the-evil/tests:ro
       - ./LICENSE.md:/root/eval-the-evil/LICENSE.md:ro
     ports:
       - 1101:1101

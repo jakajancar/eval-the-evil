@@ -212,6 +212,16 @@ async function main() {
         });
     });
 
+    await withServerProcess(['--threads', 1], async (call) => {
+        const blob = fs.readFileSync(__dirname+'/../tests/3mb-test.json');
+        const request = `{"code":"return data.length","context":{"data":${blob}}}`;
+        await test(`Large JSON handling performance is as expected`, async () => {
+            for (let i = 0; i < 10; i++) {
+                assert.deepStrictEqual(await call(request, true), {status: 'success', return_value: 42450});
+            }
+        });
+    });
+
     await withServerProcess(['--threads', 1], async (call, subprocess) => {
         await test(`Memory usage is stable`, async () => {
             function getHighWaterMark() {
