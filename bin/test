@@ -154,6 +154,26 @@ async function main() {
     }
 
     await withServerProcess(['--threads', 1], async (call) => {
+        await group('Resource constraints', async () => {
+            // await test(`Infinite loop`, async () => {
+            //     assert.deepStrictEqual(await call({code: `while (true) {}`, context: {}}), {status: 'success', return_value: 'undefined'});
+            // });
+
+            await test(`Stack overflow`, async () => {
+                const response = await call({code: `(function boom() { boom(); })()`, context: {}});
+                assert(response.status === 'code_error');
+                assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1);
+            });
+
+            // await test(`Memory exhaustion`, async () => {
+            //     const response = await call({code: `let a = {}, i = 0; while (a[i] = ++i) {};`, context: {}});
+            //     // assert(response.status === 'code_error');
+            //     // assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1);
+            // });
+        });
+    });
+
+    await withServerProcess(['--threads', 1], async (call) => {
         await test(`Performance is as expected (warmup)`, async () => {
             for (let i = 0; i < 1000; i++) {
                 await work(call, i);
