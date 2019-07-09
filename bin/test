@@ -100,6 +100,18 @@ async function main() {
                 assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
 
+            await test(`Returns sensible error when throwing from toJSON`, async () => {
+                const code = 'return {toJSON: function() { throw new Error("my message") }}';
+                const detail = [
+                    'Uncaught Error: my message [<user-code>:1]',
+                    '',
+                    'Stack trace:',
+                    'Error: my message',
+                    '    at Object.toJSON (<user-code>:1:36)'
+                ].join('\n');
+                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+            });
+
             await test(`Returns sensible error when throwing null`, async () => {
                 const code = 'throw null';
                 const detail = [
