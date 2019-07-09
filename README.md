@@ -18,12 +18,17 @@ Eval the Evil's design goals are:
   - **Usable from any language**: Regardless of the previous point, it communicates over TCP, which is even more widely supported than Unix domain sockets.
   - **High performance**: A request is handled without creating a process, thread or V8 isolate. The only thing needed is a fresh V8 context, and even these are pre-prepared to minimize latency.
 
+Limitations:
+
+  - Heap limited to 64 MB, total thread memory usage expected under 100 MB.
+  - Does not currently support ICU (`Intl`, `Date.toLocaleDateString()`, ...).
+  - Does not currently support `ArrayBuffer`.
+
 ## To-Do
 
 Not yet finished. Missing:
 
-  - Time (`timer_create(2)`) and memory (`Isolate::GetHeapStatistics()`) resource constrains.
-  - Memory usage optimization (`MemoryPressureLevel:kModerate`?)
+  - Time limit (`timer_create(2)`).
 
 ## Usage
 

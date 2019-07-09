@@ -190,11 +190,26 @@ async function main() {
                 assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1);
             });
 
-            // await test(`Memory exhaustion`, async () => {
-            //     const response = await call({code: `let a = {}, i = 0; while (a[i] = ++i) {};`, context: {}});
-            //     // assert(response.status === 'code_error');
-            //     // assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1);
-            // });
+            const OOM_CODE = `let a = {}, i = 0; while (a[i] = ++i) {};`;
+            await test(`Heap exhaustion`, async () => {
+                const response = await call({code: OOM_CODE, context: {}});
+                assert.equal(response.status, 'code_error');
+                assert(response.detail.indexOf('Memory limit exceeded') !== -1);
+            });
+
+            await test(`Heap exhaustion (during serialization)`, async () => {
+                const response = await call({code: `return {toJSON: function() { ${OOM_CODE} }};`, context: {}});
+                console.log(response);
+                assert.equal(response.status, 'code_error');
+                assert(response.detail.indexOf('Memory limit exceeded') !== -1);
+            });
+
+            await test(`ArrayBuffer exhaustion`, async () => {
+                // Currently the limit is 0, so this is easy :)
+                const response = await call({code: `new ArrayBuffer(1);`, context: {}});
+                assert(response.status === 'code_error');
+                assert(response.detail.indexOf('Array buffer allocation failed') !== -1);
+            });
         });
     });
 

@@ -24,6 +24,12 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
 v8::Local<v8::String> error_response(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, const char *status, v8::Local<v8::String> detail);
 v8::Local<v8::String> trycatch_to_detail(v8::Isolate *isolate, v8::Local<v8::Context> tostring_context, v8::TryCatch *try_catch);
 
+class VeryBadArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
+    void* Allocate(size_t length) override { return NULL; }
+    void* AllocateUninitialized(size_t length) override { return NULL; }
+    void Free(void* data, size_t) override { }
+};
+
 int main(int argc, char *argv[])
 {
   // Process arguments
@@ -62,12 +68,23 @@ int main(int argc, char *argv[])
       acceptor.listen();
 
       // Create a new Isolate and make it the current one.
+      v8::ResourceConstraints resource_constraints;
+      resource_constraints.set_max_semi_space_size_in_kb(1024);
+      resource_constraints.set_max_old_space_size(64);
+
       v8::Isolate::CreateParams create_params;
-      create_params.array_buffer_allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+      create_params.constraints = resource_constraints;
+      create_params.array_buffer_allocator = new VeryBadArrayBufferAllocator();
+
       v8::Isolate* isolate = v8::Isolate::New(create_params);
       {
         v8::Isolate::Scope isolate_scope(isolate);
         v8::HandleScope handle_scope(isolate);
+
+        isolate->AddNearHeapLimitCallback([](void *isolate, size_t current_heap_limit, size_t initial_heap_limit) {
+          static_cast<v8::Isolate*>(isolate)->TerminateExecution();
+          return current_heap_limit;
+        }, isolate);
 
         // We use a separate context for serializing our JSON responses, because
         // we don't want toJSON() or some other weirdness breaking the protocol.
@@ -195,14 +212,20 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
     if (!v8::ScriptCompiler::CompileFunctionInContext(user_context, &source, 0, {}, 2, context_extensions).ToLocal(&function))
       return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
 
-    // Execute the compiled function to get the result.
+    // Execute the compiled function to get the result, then serialize it.
     v8::Local<v8::Value> retval;
-    if (!function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval))
-      return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
-
-    // Serialize the result
-    if (!v8::JSON::Stringify(user_context, retval).ToLocal(&retval_string))
-      return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
+    if (
+        !function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) ||
+        !v8::JSON::Stringify(user_context, retval).ToLocal(&retval_string)
+    ) {
+      if (isolate->IsExecutionTerminating()) {
+        // Execution terminated by us
+        isolate->CancelTerminateExecution();
+        return error_response(isolate, safe_context, "code_error", v8_istr("Memory limit exceeded."));
+      } else {
+        return error_response(isolate, safe_context, "code_error", trycatch_to_detail(isolate, user_context, &try_catch));
+      }
+    }
 
     // Stringify may return `undefined` in several cases, which is clearly not
     // valid JSON. Fix that here.
