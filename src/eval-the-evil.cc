@@ -20,7 +20,7 @@
 namespace po = boost::program_options;
 using boost::asio::ip::tcp;
 
-v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, std::string *request_blob);
+v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, v8::Local<v8::Context> user_context, std::string *request_blob);
 v8::Local<v8::String> error_response(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, const char *status, v8::Local<v8::String> detail);
 v8::Local<v8::String> trycatch_to_detail(v8::Isolate *isolate, v8::Local<v8::Context> tostring_context, v8::TryCatch *try_catch);
 
@@ -95,6 +95,9 @@ int main(int argc, char *argv[])
           v8::HandleScope handle_scope(isolate);
           // TODO: Prepare the context here instead, before accepting connection, to reduce latency.
 
+          // Create a new context (before accepting connection).
+          v8::Local<v8::Context> user_context = v8::Context::New(isolate);
+
           // Accept a connection
           tcp::socket sock(io_service);
           acceptor.accept(sock);
@@ -108,7 +111,7 @@ int main(int argc, char *argv[])
           assert(request_buffer->length() == read_bytes);
 
           // Evaluate
-          v8::Local<v8::String> response_string = evaluate_request(isolate, safe_context, request_buffer);
+          v8::Local<v8::String> response_string = evaluate_request(isolate, safe_context, user_context, request_buffer);
 
           // Send response
           v8::String::Utf8Value response_buffer(isolate, response_string); // TODO: do not buffer
@@ -155,7 +158,7 @@ template <size_t SIZE> v8::Local<v8::String> v8_concat(const v8::Local<v8::Strin
 }
 
 //TODO: Remove isolate parameter
-v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, std::string *request_blob)
+v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Context> safe_context, v8::Local<v8::Context> user_context, std::string *request_blob)
 {
   // Stuff passed from unsafe to safe context
   //
@@ -164,8 +167,6 @@ v8::Local<v8::String> evaluate_request(v8::Isolate *isolate, v8::Local<v8::Conte
   v8::Local<v8::String> retval_string;
 
   {
-    // Create a new context.
-    v8::Local<v8::Context> user_context = v8::Context::New(isolate);
     v8::Context::Scope context_scope(user_context);
     v8::TryCatch try_catch(isolate);
 

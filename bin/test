@@ -225,7 +225,7 @@ async function main() {
         });
     });
 
-    await withServerProcess(['--threads', 1], async (call) => {
+    await withServerProcess(['--threads', 2], async (call) => {
         await test(`Performance is as expected (warmup)`, async () => {
             for (let i = 0; i < 1000; i++) {
                 await work(call, i);
