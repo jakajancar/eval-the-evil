@@ -3,7 +3,7 @@ set -eu -o pipefail
 cd "$(dirname $0)/.."
 
 mkdir -p build
-clang++ src/eval-the-evil.cc -o build/eval-the-evil \
+clang++ src/*.cc -o build/eval-the-evil \
     -pthread \
     -lstdc++ \
     -l:libv8_monolith.a \
