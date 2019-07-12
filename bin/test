@@ -81,6 +81,23 @@ async function main() {
             await test(`Does not provide async functions in scope`, async () => {
                 assert.deepStrictEqual(await call({code: 'return typeof setTimeout === "undefined" && typeof setInterval === "undefined"', context: {}}), {status: 'success', return_value: true});
             });
+            
+            await test(`i18n works as expected`, async() => {
+                // ICU is currently disabled, so we just check that there isn't a crash.
+                // Should be easy to enable if ever needed.
+                const ICU_ENABLED = false;
+
+                // Date stuff works either way, just a little crippled
+                assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
+                assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
+
+                // Intl is completely unavailable
+                assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
+                if (ICU_ENABLED) {
+                    assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
+                    assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
+                }
+            });
         });
 
         await group(`Code error handling`, async () => {
@@ -165,32 +182,17 @@ async function main() {
             });
         });
 
-        await test(`i18n works as expected`, async() => {
-            // ICU is currently disabled, so we just check that there isn't a crash.
-            // Should be easy to enable if ever needed.
-            const ICU_ENABLED = false;
+        await group(`Serialization context safety`, async () => {
+            await test(`toJSON() executes in user's context`, async () => {
+                assert.deepStrictEqual(await call({code: `global.foo = 'bar'; return {toJSON: function() { return foo; }}`, context: {}}), {status: 'success', return_value: 'bar'});
+            });
 
-            // Date stuff works either way, just a little crippled
-            assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
-            assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
-
-            // Intl is completely unavailable
-            assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
-            if (ICU_ENABLED) {
-                assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
-                assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
-            }
-        });
-
-        await test(`toJSON() executes in user's context`, async () => {
-            assert.deepStrictEqual(await call({code: `global.foo = 'bar'; return {toJSON: function() { return foo; }}`, context: {}}), {status: 'success', return_value: 'bar'});
-        });
-
-        await test(`toJSON() cannot be used to break top-level response context`, async () => {
-            const response = await call({code: `Object.prototype.toJSON = function() { return 'KABOOM, interfered with top-level Stringify!'; }; throw 'benign error from code';`, context: {}});
-            assert.equal(typeof response, 'object');
-            assert.equal(response.status, 'code_error');
-            assert(response.detail.indexOf('benign error from code') !== -1);
+            await test(`toJSON() cannot be used to break top-level response context`, async () => {
+                const response = await call({code: `Object.prototype.toJSON = function() { return 'KABOOM, interfered with top-level Stringify!'; }; throw 'benign error from code';`, context: {}});
+                assert.equal(typeof response, 'object');
+                assert.equal(response.status, 'code_error');
+                assert(response.detail.indexOf('benign error from code') !== -1);
+            });
         });
     });
 
@@ -238,27 +240,29 @@ async function main() {
         });
     });
 
-    await withServerProcess(['--threads', 2], async (call) => {
-        await test(`Performance is as expected (warmup)`, async () => {
-            for (let i = 0; i < 1000; i++) {
-                await work(call, i);
-            }
+    await group('Performance', async () => {
+        await withServerProcess(['--threads', 2], async (call) => {
+            await test(`Performance is as expected (warmup)`, async () => {
+                for (let i = 0; i < 1000; i++) {
+                    await work(call, i);
+                }
+            });
+
+            await test(`Performance is as expected`, async () => {
+                for (let i = 1000; i < 2000; i++) {
+                    await work(call, i);
+                }
+            });
         });
 
-        await test(`Performance is as expected`, async () => {
-            for (let i = 1000; i < 2000; i++) {
-                await work(call, i);
-            }
-        });
-    });
-
-    await withServerProcess(['--threads', 1], async (call) => {
-        const blob = fs.readFileSync(__dirname+'/../tests/3mb-test.json');
-        const request = `{"code":"return data.length","context":{"data":${blob}}}`;
-        await test(`Large JSON handling performance is as expected`, async () => {
-            for (let i = 0; i < 10; i++) {
-                assert.deepStrictEqual(await call(request, true), {status: 'success', return_value: 42450});
-            }
+        await withServerProcess(['--threads', 1], async (call) => {
+            const blob = fs.readFileSync(__dirname+'/../tests/3mb-test.json');
+            const request = `{"code":"return data.length","context":{"data":${blob}}}`;
+            await test(`Large JSON handling performance is as expected`, async () => {
+                for (let i = 0; i < 10; i++) {
+                    assert.deepStrictEqual(await call(request, true), {status: 'success', return_value: 42450});
+                }
+            });
         });
     });
 
