@@ -6,6 +6,14 @@ const assert = require('assert');
 
 main();
 
+assert.supersetStrictEqual = function supersetStrictEqual(actual, expected, message) {
+    const filteredActual = {};
+    for (const k in expected) {
+        filteredActual[k] = actual[k];
+    }
+    assert.deepStrictEqual(filteredActual, expected, message);
+};
+
 async function main() {
     process.stdout.write('Running tests\n');
     await test(`Binary is linked only against very common dynamic libraries`, async () => {
@@ -37,65 +45,65 @@ async function main() {
         await group(`Bad request handling`, async () => {
 
             await test(`Returns correct error if request is not JSON`, async () => {
-                assert.deepStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
+                assert.supersetStrictEqual(await call('not json', true), {status: 'bad_request', detail: "Request is not valid JSON."});
             });
 
             await group(`Returns correct error if request is not an object`, async () => {
                 for (value of ["hello world", 42, true, null, []]) {
                     await test(JSON.stringify(value), async () => {
-                        assert.deepStrictEqual(await call(value), {status: 'bad_request', detail: "Request is not an object."});
+                        assert.supersetStrictEqual(await call(value), {status: 'bad_request', detail: "Request is not an object."});
                     });
                 }
             });
 
             await test(`Returns correct error if code is missing`, async () => {
-                assert.deepStrictEqual(await call({context: {}}), {status: 'bad_request', detail: "Missing 'code' parameter or it is not a string."});
+                assert.supersetStrictEqual(await call({context: {}}), {status: 'bad_request', detail: "Missing 'code' parameter or it is not a string."});
             });
 
             await test(`Returns correct error if context is missing`, async () => {
-                assert.deepStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
+                assert.supersetStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
             });
 
             await group(`Returns correct error if timeout is not a non-negative integer`, async () => {
                 for (value of ["hello world", -1, true, null, {}, [], 1.1]) {
                     await test(JSON.stringify(value), async () => {
-                        assert.deepStrictEqual(await call({code: '', context: {}, timeout: value}), {status: 'bad_request', detail: "'timeout' parameter must be a non-negative integer."});
+                        assert.supersetStrictEqual(await call({code: '', context: {}, timeout: value}), {status: 'bad_request', detail: "'timeout' parameter must be a non-negative integer."});
                     });
                 }
             });
         });
 
         await test(`Computes 1 (code) + 1 (context)`, async () => {
-            assert.deepStrictEqual(await call({code: 'return 1+i', context: {i: 1}}), {status: 'success', return_value: 2});
+            assert.supersetStrictEqual(await call({code: 'return 1+i', context: {i: 1}}), {status: 'success', return_value: 2});
         });
 
         await group(`Environment`, async () => {
             await test(`Provides a 'global' object self-reference`, async () => {
-                assert.deepStrictEqual(await call({code: 'x = 1; return global.x + 1', context: {}}), {status: 'success', return_value: 2});
+                assert.supersetStrictEqual(await call({code: 'x = 1; return global.x + 1', context: {}}), {status: 'success', return_value: 2});
             });
 
             await test(`User-provided context overrides implicit context`, async () => {
-                assert.deepStrictEqual(await call({code: 'return global === 42', context: {global: 42}}), {status: 'success', return_value: true});
+                assert.supersetStrictEqual(await call({code: 'return global === 42', context: {global: 42}}), {status: 'success', return_value: true});
             });
 
             await test(`Does not provide async functions in scope`, async () => {
-                assert.deepStrictEqual(await call({code: 'return typeof setTimeout === "undefined" && typeof setInterval === "undefined"', context: {}}), {status: 'success', return_value: true});
+                assert.supersetStrictEqual(await call({code: 'return typeof setTimeout === "undefined" && typeof setInterval === "undefined"', context: {}}), {status: 'success', return_value: true});
             });
-            
+
             await test(`i18n works as expected`, async() => {
                 // ICU is currently disabled, so we just check that there isn't a crash.
                 // Should be easy to enable if ever needed.
                 const ICU_ENABLED = false;
 
                 // Date stuff works either way, just a little crippled
-                assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
-                assert.deepStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
+                assert.supersetStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('en-US', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Thursday' : 'Thu Jan 01 1987'});
+                assert.supersetStrictEqual(await call({code: `return new Date(Date.UTC(1987, 0, 1)).toLocaleDateString('de-DE', {weekday: 'long'});`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'Donnerstag' : 'Thu Jan 01 1987'});
 
                 // Intl is completely unavailable
-                assert.deepStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
+                assert.supersetStrictEqual(await call({code: `return typeof Intl;`, context: {}}), {status: 'success', return_value: ICU_ENABLED ? 'object' : 'undefined'});
                 if (ICU_ENABLED) {
-                    assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
-                    assert.deepStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
+                    assert.supersetStrictEqual(await call({code: `return new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'January'});
+                    assert.supersetStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
                 }
             });
         });
@@ -109,7 +117,7 @@ async function main() {
                     `Stack trace:`,
                     `SyntaxError: Unexpected token !`,
                 ].join('\n');
-                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+                assert.supersetStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
 
             await test(`Returns only user frames when throwing an error`, async () => {
@@ -122,7 +130,7 @@ async function main() {
                     '    at foo (<user-code>:1:24)',
                     '    at <user-code>:1:51'
                 ].join('\n');
-                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+                assert.supersetStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
 
             await test(`Returns sensible error when throwing from toJSON`, async () => {
@@ -134,7 +142,7 @@ async function main() {
                     'Error: my message',
                     '    at Object.toJSON (<user-code>:1:36)'
                 ].join('\n');
-                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+                assert.supersetStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
 
             await test(`Returns sensible error when throwing null`, async () => {
@@ -145,7 +153,7 @@ async function main() {
                     'Stack trace:',
                     '<no stack trace>'
                 ].join('\n');
-                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+                assert.supersetStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
 
             await test(`Returns sensible error when throwing random unserializable object`, async () => {
@@ -156,35 +164,35 @@ async function main() {
                     'Stack trace:',
                     '<no stack trace>'
                 ].join('\n');
-                assert.deepStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
+                assert.supersetStrictEqual(await call({code, context: {}}), {status: 'code_error', detail});
             });
         });
 
         await group(`Can round-trip any datatype from json.org`, async () => {
             for (value of ["hello world", "😬", 42, 1e9, 1.7, true, false, null, [], [1,2,3], {}, {a: 1, b: {}, c: []}]) {
                 await test(JSON.stringify(value), async () => {
-                    assert.deepStrictEqual(await call({code: 'return foo', context: {foo: value}}), {status: 'success', return_value: value});
+                    assert.supersetStrictEqual(await call({code: 'return foo', context: {foo: value}}), {status: 'success', return_value: value});
                 });
             }
         });
 
         await group('JSON.serialize(...) === undefined weirdness', async () => {
             await test(`Returns null if user code returns undefined.`, async () => {
-                assert.deepStrictEqual(await call({code: `return undefined`, context: {}}), {status: 'success', return_value: null});
+                assert.supersetStrictEqual(await call({code: `return undefined`, context: {}}), {status: 'success', return_value: null});
             });
 
             await test(`Returns null if user code returns function.`, async () => {
-                assert.deepStrictEqual(await call({code: `return function() {}`, context: {}}), {status: 'success', return_value: null});
+                assert.supersetStrictEqual(await call({code: `return function() {}`, context: {}}), {status: 'success', return_value: null});
             });
 
             await test(`Returns null if user code returns undefined in toJSON().`, async () => {
-                assert.deepStrictEqual(await call({code: `return {toJSON: function() { return undefined; }}`, context: {}}), {status: 'success', return_value: null});
+                assert.supersetStrictEqual(await call({code: `return {toJSON: function() { return undefined; }}`, context: {}}), {status: 'success', return_value: null});
             });
         });
 
         await group(`Serialization context safety`, async () => {
             await test(`toJSON() executes in user's context`, async () => {
-                assert.deepStrictEqual(await call({code: `global.foo = 'bar'; return {toJSON: function() { return foo; }}`, context: {}}), {status: 'success', return_value: 'bar'});
+                assert.supersetStrictEqual(await call({code: `global.foo = 'bar'; return {toJSON: function() { return foo; }}`, context: {}}), {status: 'success', return_value: 'bar'});
             });
 
             await test(`toJSON() cannot be used to break top-level response context`, async () => {
@@ -197,19 +205,41 @@ async function main() {
     });
 
     async function work(call, i) {
-        assert.deepStrictEqual(await call({code: `return i + ${i}`, context: {i: i}}), {status: 'success', return_value: 2*i});
+        assert.supersetStrictEqual(await call({code: `return i + ${i}`, context: {i: i}}), {status: 'success', return_value: 2*i});
     }
 
     await withServerProcess(['--threads', 1], async (call) => {
         await group('Resource constraints', async () => {
-            await test(`CPU time limit exceeded`, async () => {
-                const start = +new Date;
-                const response = await call({code: `while (true) {}`, context: {}, timeout: 300});
-                const duration = +new Date - start;
+            await group('CPU time', async () => {
+                // Note that this busy waits for `duration` in real time, whereas the
+                // process measures in CPU time. The tests will fail if system is loaded.
+                const BUSY_WAIT_CODE = `const start = +new Date; while (+new Date <= start + duration) { /* busy wait */ }`;
 
-                assert.equal(response.status, 'code_error');
-                assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
-                assert(300 < duration && duration < 400, `Expected 300 < duration (${duration}) < 400`);
+                await group('Execution time measurement is accurate', async () => {
+                    const TOLERANCE_FIXED = 1;
+                    const TOLERANCE_SHARE = 5;
+                    for (const duration of [0, 1, 5, 10, 50, 100, 500]) {
+                        const tolerance = TOLERANCE_FIXED + Math.floor(duration*TOLERANCE_SHARE/100);
+                        const min = Math.max(duration - tolerance, 0);
+                        const max = duration + tolerance;
+                        await test(`${duration} ms busy wait should take ${min}-${max} ms`, async () => {
+                            const response = await call({code: BUSY_WAIT_CODE, context: {duration}, timeout: duration*10});
+                            assert.equal(response.status, 'success');
+                            process.stdout.write(` [was ${response.time}]`);
+                            assert(min <= response.time && response.time <= max);
+                        });
+                    }
+                });
+
+                await test(`CPU time limit exceeded`, async () => {
+                    const start = +new Date;
+                    const response = await call({code: `while (true) {}`, context: {}, timeout: 300});
+                    const duration = +new Date - start;
+
+                    assert.equal(response.status, 'code_error');
+                    assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
+                    assert(300 < duration && duration < 400, `Expected 300 < duration (${duration}) < 400`);
+                });
             });
 
             await test(`Stack overflow`, async () => {
@@ -260,7 +290,7 @@ async function main() {
             const request = `{"code":"return data.length","context":{"data":${blob}}}`;
             await test(`Large JSON handling performance is as expected`, async () => {
                 for (let i = 0; i < 10; i++) {
-                    assert.deepStrictEqual(await call(request, true), {status: 'success', return_value: 42450});
+                    assert.supersetStrictEqual(await call(request, true), {status: 'success', return_value: 42450});
                 }
             });
         });

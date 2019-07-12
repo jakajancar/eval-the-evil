@@ -4,6 +4,7 @@
 #include <libplatform/libplatform.h>
 #include <v8.h>
 #include "timer.h"
+#include "time.h"
 #include <atomic>
 #include <stdexcept>
 
@@ -183,6 +184,7 @@ class RequestContext {
       std::atomic<bool> over_cpu(false);
       bool success = false;
       v8::Local<v8::String> retval_stringified;
+      uint32_t time = 0;
       {
         auto oom_callback = [&]() {
           over_memory.store(true);
@@ -196,6 +198,7 @@ class RequestContext {
         };
         Timer<decltype(cpu_callback)> timer(std::chrono::milliseconds(timeout_millis), CLOCK_THREAD_CPUTIME_ID, cpu_callback);
 
+        const uint64_t start = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
         v8::Local<v8::Value> retval;
         if (
             function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) &&
@@ -203,6 +206,8 @@ class RequestContext {
         ) {
           success = true;
         }
+        const uint64_t end = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
+        time = (end - start) / 1e6;
       }
       if (thread->isolate->IsExecutionTerminating()) {
         thread->isolate->CancelTerminateExecution();
@@ -226,17 +231,20 @@ class RequestContext {
           retval_stringified = v8_istr("null");
       }
 
-      return success_response(retval_stringified);
+      return success_response(retval_stringified, time);
     }
 
     /* Response generation */
 
-    v8::Local<v8::String> success_response(v8::Local<v8::String> retval)
+    v8::Local<v8::String> success_response(v8::Local<v8::String> retval, uint32_t time)
     {
       v8::Local<v8::Context> response_context = thread->response_context;
       v8::Context::Scope context_scope(response_context);
 
-      return v8_concat({ v8_istr("{\"status\":\"success\",\"return_value\":"), retval, v8_istr("}") });
+      std::stringstream time_string;
+      time_string << time;
+
+      return v8_concat({ v8_istr("{\"status\":\"success\",\"return_value\":"), retval, v8_istr(",\"time\":"), v8_str(time_string.str().c_str()), v8_istr("}") });
     }
 
     v8::Local<v8::String> error_response(const char *status, v8::Local<v8::String> detail)
@@ -291,6 +299,15 @@ class RequestContext {
         buf = v8::String::Concat(thread->isolate, buf, parts[i]);
       return buf;
     }
+
+    uint64_t clock_gettime_nanos(clockid_t clockid)
+    {
+      struct timespec time;
+      if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) != 0)
+        throw std::system_error(errno, std::generic_category(), "Cannot get time");
+      return time.tv_sec * 10e9 + time.tv_nsec;
+    }
+
 };
 
 }
