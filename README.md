@@ -24,12 +24,6 @@ Limitations:
   - Does not currently support ICU (`Intl`, `Date.toLocaleDateString()`, ...).
   - Does not currently support `ArrayBuffer`.
 
-## To-Do
-
-Not yet finished. Missing:
-
-  - Time limit (`timer_create(2)`).
-
 ## Usage
 
 ### TCP protocol
@@ -39,6 +33,7 @@ Request:
     {
         "context": <object>
         "code": <string>
+        ["timeout": <int>] // default 10ms
     }
 
 Success response:

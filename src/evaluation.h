@@ -1,9 +1,11 @@
 #pragma once
 
-#include <memory>
 #include <assert.h>
 #include <libplatform/libplatform.h>
 #include <v8.h>
+#include "timer.h"
+#include <atomic>
+#include <stdexcept>
 
 namespace eval {
 
@@ -58,15 +60,35 @@ class ThreadContext {
   public:
     ThreadContext() : isolate(create_isolate(&allocator)), handle_scope(isolate), response_context(v8::Context::New(isolate))
     {
-      isolate->AddNearHeapLimitCallback([](void *isolate, size_t current_heap_limit, size_t initial_heap_limit) {
-        static_cast<v8::Isolate*>(isolate)->TerminateExecution();
-        return current_heap_limit;
-      }, isolate);
     }
 
     ~ThreadContext()
     {
       isolate->Dispose();
+    }
+};
+
+template<typename Callback>
+class NearHeapLimitCallbackScope
+{
+  friend class RequestContext;
+  private:
+    v8::Isolate *isolate;
+    const Callback &callback;
+    NearHeapLimitCallbackScope(v8::Isolate *isolate, const Callback &callback): isolate(isolate), callback(callback)
+    {
+      isolate->AddNearHeapLimitCallback(wrapper, this);
+    }
+
+    ~NearHeapLimitCallbackScope()
+    {
+      isolate->RemoveNearHeapLimitCallback(wrapper, 0);
+    }
+
+    static size_t wrapper(void *data, size_t current_heap_limit, size_t initial_heap_limit)
+    {
+      static_cast<NearHeapLimitCallbackScope*>(data)->callback();
+      return current_heap_limit;
     }
 };
 
@@ -107,6 +129,7 @@ class RequestContext {
       // Parse the request.
       v8::Local<v8::Object> request_context;
       v8::Local<v8::String> request_code;
+      uint32_t timeout_millis;
       {
         v8::Local<v8::String> request_string;
         if (!v8::String::NewFromUtf8(thread->isolate, request_blob, v8::NewStringType::kNormal).ToLocal(&request_string))
@@ -131,6 +154,14 @@ class RequestContext {
             !request_code_value->IsString())
           return error_response("bad_request", v8_istr("Missing 'code' parameter or it is not a string."));
         request_code = v8::Local<v8::String>::Cast(request_code_value);
+
+        v8::Local<v8::Value> timeout_value = request_object->Get(user_context, v8_istr("timeout")).ToLocalChecked();
+        if (timeout_value->IsUndefined())
+          timeout_millis = 10;
+        else if (timeout_value->IsUint32())
+          timeout_millis = v8::Local<v8::Uint32>::Cast(timeout_value)->Value();
+        else
+          return error_response("bad_request", v8_istr("'timeout' parameter must be a non-negative integer."));
       }
 
       // Prepare the source code.
@@ -147,20 +178,44 @@ class RequestContext {
       if (!v8::ScriptCompiler::CompileFunctionInContext(user_context, &source, 0, {}, 2, context_extensions).ToLocal(&function))
         return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
 
-      // Execute the compiled function to get the result, then serialize it.
-      v8::Local<v8::Value> retval;
+      // Resource-constrained execution scope for user-defined code
+      std::atomic<bool> over_memory(false);
+      std::atomic<bool> over_cpu(false);
+      bool success = false;
       v8::Local<v8::String> retval_stringified;
-      if (
-          !function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) ||
-          !v8::JSON::Stringify(user_context, retval).ToLocal(&retval_stringified)
-      ) {
-        if (thread->isolate->IsExecutionTerminating()) {
-          // Execution terminated by us
-          thread->isolate->CancelTerminateExecution();
-          return error_response("code_error", v8_istr("Memory limit exceeded."));
-        } else {
-          return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
+      {
+        auto oom_callback = [&]() {
+          over_memory.store(true);
+          thread->isolate->TerminateExecution();
+        };
+        NearHeapLimitCallbackScope<decltype(oom_callback)> oom_scope(thread->isolate, oom_callback);
+
+        auto cpu_callback = [&]{
+          over_cpu.store(true);
+          thread->isolate->TerminateExecution();
+        };
+        Timer<decltype(cpu_callback)> timer(std::chrono::milliseconds(timeout_millis), CLOCK_THREAD_CPUTIME_ID, cpu_callback);
+
+        v8::Local<v8::Value> retval;
+        if (
+            function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) &&
+            v8::JSON::Stringify(user_context, retval).ToLocal(&retval_stringified)
+        ) {
+          success = true;
         }
+      }
+      if (thread->isolate->IsExecutionTerminating()) {
+        thread->isolate->CancelTerminateExecution();
+        if (over_memory.load())
+          return error_response("code_error", v8_istr("Memory limit exceeded."));
+        else if (over_cpu.load())
+          return error_response("code_error", v8_istr("CPU time limit exceeded."));
+        else
+          throw std::runtime_error("Execution terminating but neither over memory or cpu time limits?");
+      } else if (!success) {
+        return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
+      } else if (retval_stringified.IsEmpty()) {
+        throw std::runtime_error("Execution succeeded but retval is empty?");
       }
 
       // Stringify may return `undefined` in several cases, which is clearly not

@@ -55,6 +55,14 @@ async function main() {
             await test(`Returns correct error if context is missing`, async () => {
                 assert.deepStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
             });
+
+            await group(`Returns correct error if timeout is not a non-negative integer`, async () => {
+                for (value of ["hello world", -1, true, null, {}, [], 1.1]) {
+                    await test(JSON.stringify(value), async () => {
+                        assert.deepStrictEqual(await call({code: '', context: {}, timeout: value}), {status: 'bad_request', detail: "'timeout' parameter must be a non-negative integer."});
+                    });
+                }
+            });
         });
 
         await test(`Computes 1 (code) + 1 (context)`, async () => {
@@ -192,35 +200,40 @@ async function main() {
 
     await withServerProcess(['--threads', 1], async (call) => {
         await group('Resource constraints', async () => {
-            // await test(`Infinite loop`, async () => {
-            //     assert.deepStrictEqual(await call({code: `while (true) {}`, context: {}}), {status: 'success', return_value: 'undefined'});
-            // });
+            await test(`CPU time limit exceeded`, async () => {
+                const start = +new Date;
+                const response = await call({code: `while (true) {}`, context: {}, timeout: 300});
+                const duration = +new Date - start;
+
+                assert.equal(response.status, 'code_error');
+                assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
+                assert(300 < duration && duration < 400, `Expected 300 < duration (${duration}) < 400`);
+            });
 
             await test(`Stack overflow`, async () => {
                 const response = await call({code: `(function boom() { boom(); })()`, context: {}});
                 assert.equal(response.status, 'code_error');
-                assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1);
+                assert(response.detail.indexOf('Maximum call stack size exceeded') !== -1, `Received detail: ${response.detail}`);
             });
 
             const OOM_CODE = `let a = {}, i = 0; while (a[i] = ++i) {};`;
             await test(`Heap exhaustion`, async () => {
-                const response = await call({code: OOM_CODE, context: {}});
+                const response = await call({code: OOM_CODE, context: {}, timeout: 1000});
                 assert.equal(response.status, 'code_error');
-                assert(response.detail.indexOf('Memory limit exceeded') !== -1);
+                assert(response.detail.indexOf('Memory limit exceeded') !== -1, `Received detail: ${response.detail}`);
             });
 
             await test(`Heap exhaustion (during serialization)`, async () => {
-                const response = await call({code: `return {toJSON: function() { ${OOM_CODE} }};`, context: {}});
-                console.log(response);
+                const response = await call({code: `return {toJSON: function() { ${OOM_CODE} }};`, context: {}, timeout: 1000});
                 assert.equal(response.status, 'code_error');
-                assert(response.detail.indexOf('Memory limit exceeded') !== -1);
+                assert(response.detail.indexOf('Memory limit exceeded') !== -1, `Received detail: ${response.detail}`);
             });
 
             await test(`ArrayBuffer exhaustion`, async () => {
                 // Currently the limit is 0, so this is easy :)
                 const response = await call({code: `new ArrayBuffer(1);`, context: {}});
                 assert.equal(response.status, 'code_error');
-                assert(response.detail.indexOf('Array buffer allocation failed') !== -1);
+                assert(response.detail.indexOf('Array buffer allocation failed') !== -1, `Received detail: ${response.detail}`);
             });
         });
     });

@@ -5,6 +5,7 @@ cd "$(dirname $0)/.."
 mkdir -p build
 clang++ src/*.cc -o build/eval-the-evil \
     -pthread \
+    -lrt \
     -lstdc++ \
     -l:libv8_monolith.a \
     -l:libboost_program_options.a \
