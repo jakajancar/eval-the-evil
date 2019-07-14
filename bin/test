@@ -221,7 +221,7 @@ async function main() {
                 // process measures in CPU time. The tests will fail if system is loaded.
                 const BUSY_WAIT_CODE = `const start = +new Date; while (+new Date <= start + duration) { /* busy wait */ }`;
 
-                await group('Execution time measurement is accurate', async () => {
+                await group('Execution time measurement is accurate within 1 ms + 5%', async () => {
                     const TOLERANCE_FIXED = 1;
                     const TOLERANCE_SHARE = 5;
                     for (const duration of [0, 1, 5, 10, 50, 100, 500, 1000]) {
@@ -237,14 +237,24 @@ async function main() {
                     }
                 });
 
-                await test(`CPU time limit exceeded`, async () => {
-                    const start = +new Date;
-                    const response = await call({code: `while (true) {}`, context: {}, timeout: 300});
-                    const duration = +new Date - start;
+                await group(`Not terminated if 1 ms below limit`, async () => {
+                    for (const limit of [1, 5, 10, 50, 100]) {
+                        await test(`${limit} ms limit`, async () => {
+                            const response = await call({code: BUSY_WAIT_CODE, context: {duration: limit - 1}, timeout: limit});
+                            assert.equal(response.status, 'success');
+                        });
+                    }
+                });
 
-                    assert.equal(response.status, 'code_error');
-                    assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
-                    assert(300 < duration && duration < 400, `Expected 300 < duration (${duration}) < 400`);
+                // Unfortunately, this is fairly low-resolution :/
+                await group(`Terminated if 10 ms above limit`, async () => {
+                    for (const limit of [1, 5, 10, 50, 100]) {
+                        await test(`${limit} ms limit`, async () => {
+                            const response = await call({code: BUSY_WAIT_CODE, context: {duration: limit + 10}, timeout: limit});
+                            assert.equal(response.status, 'code_error');
+                            assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
+                        });
+                    }
                 });
             });
 
