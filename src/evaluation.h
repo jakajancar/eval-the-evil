@@ -328,7 +328,7 @@ class RequestContext {
       struct timespec time;
       if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) != 0)
         throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
-      return time.tv_sec * 10e9 + time.tv_nsec;
+      return time.tv_sec * 1e9 + time.tv_nsec;
     }
 
 };

@@ -224,7 +224,7 @@ async function main() {
                 await group('Execution time measurement is accurate', async () => {
                     const TOLERANCE_FIXED = 1;
                     const TOLERANCE_SHARE = 5;
-                    for (const duration of [0, 1, 5, 10, 50, 100, 500]) {
+                    for (const duration of [0, 1, 5, 10, 50, 100, 500, 1000]) {
                         const tolerance = TOLERANCE_FIXED + Math.floor(duration*TOLERANCE_SHARE/100);
                         const min = Math.max(duration - tolerance, 0);
                         const max = duration + tolerance;
