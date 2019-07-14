@@ -1,9 +1,8 @@
 #include <iostream>
 #include <thread>
-
 #include <boost/program_options.hpp>
 #include <boost/asio.hpp>
-
+#include "error-handling.h"
 #include "evaluation.h"
 
 namespace po = boost::program_options;
@@ -11,6 +10,8 @@ using boost::asio::ip::tcp;
 
 int main(int argc, char *argv[])
 {
+  GlobalErrorHandler eh;
+
   // Process arguments
   int port;
   int num_threads;
@@ -60,7 +61,7 @@ int main(int argc, char *argv[])
         std::string *request_blob = new std::string();
         std::size_t read_bytes = boost::asio::read(sock, boost::asio::dynamic_buffer(*request_blob), boost::asio::transfer_all(), error);
         if (error != boost::asio::error::eof)
-          throw boost::system::system_error(error);
+          throw_with_trace(boost::system::system_error(error));
         assert(request_blob->length() == read_bytes);
 
         // Evaluate

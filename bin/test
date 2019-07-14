@@ -16,6 +16,12 @@ assert.supersetStrictEqual = function supersetStrictEqual(actual, expected, mess
 
 async function main() {
     process.stdout.write('Running tests\n');
+
+    await test(`Exceptions are thrown with throw_with_trace()`, async () => {
+        const result = child_process.spawnSync(`cd ${__dirname}/..; grep -R 'throw ' --exclude error-handling.h src/`, [], {shell: true});
+        assert.deepStrictEqual(result.stdout.toString().split('\n').filter(x => x != ''), []);
+    });
+
     await test(`Binary is linked only against very common dynamic libraries`, async () => {
         // These are what node.js uses (from node-v10.16.0-linux-x64).
         // If it's good enough for them, it's good enough for us.

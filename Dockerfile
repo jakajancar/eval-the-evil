@@ -51,7 +51,18 @@ RUN apt-get -y install \
     libboost-program-options1.67-dev \
     libboost-system1.67.0 \
     libboost-system1.67-dev \
+    libboost-stacktrace1.67.0 \
+    libboost-stacktrace1.67-dev \
+    make \
     nodejs
+
+# libbacktrace for stack traces, used indirectly by boost-stacktrace
+RUN cd /root && \
+    git clone https://github.com/ianlancetaylor/libbacktrace.git && \
+    cd libbacktrace && \
+    git checkout 5a99ff7fed66b8ea8f09c9805c138524a7035ece && \
+    ./configure && make && make install
+
 
 # ghr is used for uploading release artifacts
 RUN cd /tmp && \

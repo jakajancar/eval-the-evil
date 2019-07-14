@@ -7,6 +7,7 @@
 #include "time.h"
 #include <atomic>
 #include <stdexcept>
+#include "error-handling.h"
 
 namespace eval {
 
@@ -38,14 +39,24 @@ class VeryBadArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
 class ThreadContext {
   friend class RequestContext;
   private:
+    // The isolate gets deleted by its {Dispose} method, not by the default
+    // deleter. Therefore we have to define a custom deleter for the unique_ptr to
+    // call {Dispose}. We have to use the unique_ptr so that the isolate get
+    // disposed in the right order, relative to other member variables.
+    struct IsolateDeleter {
+      void operator()(v8::Isolate* isolate) const { isolate->Dispose(); }
+    };
+
     VeryBadArrayBufferAllocator allocator;
-    v8::Isolate* isolate;
+    std::unique_ptr<v8::Isolate, IsolateDeleter> isolate_owning;
+    v8::Isolate *isolate;
+    v8::Isolate::Scope isolate_scope;
     v8::HandleScope handle_scope;
     // We use a separate context for serializing our JSON responses, because
     // we don't want toJSON() or some other weirdness breaking the protocol.
     v8::Local<v8::Context> response_context;
 
-    static v8::Isolate *create_isolate(v8::ArrayBuffer::Allocator *allocator)
+    static std::unique_ptr<v8::Isolate, IsolateDeleter> create_isolate(v8::ArrayBuffer::Allocator *allocator)
     {
       v8::ResourceConstraints resource_constraints;
       resource_constraints.set_max_semi_space_size_in_kb(1024);
@@ -55,17 +66,26 @@ class ThreadContext {
       create_params.constraints = resource_constraints;
       create_params.array_buffer_allocator = allocator;
 
-      return v8::Isolate::New(create_params);
+      return std::unique_ptr<v8::Isolate, IsolateDeleter>(v8::Isolate::New(create_params));
     }
 
   public:
-    ThreadContext() : isolate(create_isolate(&allocator)), handle_scope(isolate), response_context(v8::Context::New(isolate))
+    ThreadContext() :
+        isolate_owning(create_isolate(&allocator)),
+        isolate(isolate_owning.get()),
+        isolate_scope(isolate),
+        handle_scope(isolate),
+        response_context(v8::Context::New(isolate))
     {
+      isolate->SetFatalErrorHandler([](const char *location, const char *message) {
+        std::stringstream stream;
+        stream << "V8 fatal error: " << message << " (in " << location << ")";
+        throw_with_trace(std::runtime_error(stream.str()));
+      });
     }
 
     ~ThreadContext()
     {
-      isolate->Dispose();
     }
 };
 
@@ -101,7 +121,10 @@ class RequestContext {
     std::unique_ptr<v8::String::Utf8Value> response_utf8;
 
   public:
-    RequestContext(ThreadContext *thread) : thread(thread), handle_scope(thread->isolate), user_context(v8::Context::New(thread->isolate))
+    RequestContext(ThreadContext *thread) :
+        thread(thread),
+        handle_scope(thread->isolate),
+        user_context(v8::Context::New(thread->isolate))
     {
     }
 
@@ -216,11 +239,11 @@ class RequestContext {
         else if (over_cpu.load())
           return error_response("code_error", v8_istr("CPU time limit exceeded."));
         else
-          throw std::runtime_error("Execution terminating but neither over memory or cpu time limits?");
+          throw_with_trace(std::runtime_error("Execution terminating but neither over memory or cpu time limits?"));
       } else if (!success) {
         return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
       } else if (retval_stringified.IsEmpty()) {
-        throw std::runtime_error("Execution succeeded but retval is empty?");
+        throw_with_trace(std::runtime_error("Execution succeeded but retval is empty?"));
       }
 
       // Stringify may return `undefined` in several cases, which is clearly not
@@ -304,7 +327,7 @@ class RequestContext {
     {
       struct timespec time;
       if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) != 0)
-        throw std::system_error(errno, std::generic_category(), "Cannot get time");
+        throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
       return time.tv_sec * 10e9 + time.tv_nsec;
     }
 
