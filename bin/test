@@ -283,6 +283,23 @@ async function main() {
                 assert.equal(response.status, 'code_error');
                 assert(response.detail.indexOf('Array buffer allocation failed') !== -1, `Received detail: ${response.detail}`);
             });
+
+            // TODO: add better time/memory checks
+            await group(`Weird scripts don't kill process`, async () => {
+                const scripts = [
+                    // https://github.com/laverdet/isolated-vm/issues/107
+                    // `[...'.'.repeat(1e9)]`,
+                    `Object.prototype[Symbol.iterator] = function() {return{next:() => this}}; [...({})];`,
+
+                    // https://bugs.chromium.org/p/v8/issues/detail?id=9368
+                    // `Array(1e9).fill()`,
+                ];
+                for (const script of scripts) {
+                    await test(script, async () => {
+                        const response = await call({code: script, context: {}, timeout: 10*1000});
+                    });
+                }
+            });
         });
     });
 
