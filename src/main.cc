@@ -26,7 +26,7 @@ static inline timespec duration_to_timespec(std::chrono::nanoseconds duration)
     return timespec{secs.count(), duration.count()};
 }
 
-double bench_mutex_thread_id(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_timer_thread_id(uint64_t timeout, int num_iterations, clockid_t clockid, bool use_mutex)
 {
   uint64_t accumulator = 0;
 
@@ -35,15 +35,24 @@ double bench_mutex_thread_id(uint64_t timeout, int num_iterations, clockid_t clo
     bool stop = false;
 
     auto timer_cb = [&]{
-      std::lock_guard<std::mutex> lock(stop_mutex);
-      stop = true;
+      if (use_mutex) {
+        std::lock_guard<std::mutex> lock(stop_mutex);
+        stop = true;
+      } else {
+        stop = true;
+      }
     };
     eval::Timer<decltype(timer_cb)> timer(std::chrono::nanoseconds(timeout), clockid, timer_cb);
     uint64_t start = clock_gettime_nanos(clockid);
     while (true) {
-      std::lock_guard<std::mutex> lock(stop_mutex);
-      if (stop)
-        break;
+      if (use_mutex) {
+        std::lock_guard<std::mutex> lock(stop_mutex);
+        if (stop)
+          break;
+      } else {
+        if (stop)
+          break;
+      }
     }
     uint64_t end = clock_gettime_nanos(clockid);
     uint64_t duration = end - start;
@@ -54,44 +63,29 @@ double bench_mutex_thread_id(uint64_t timeout, int num_iterations, clockid_t clo
   return (double)accumulator/num_iterations;
 }
 
-double bench_nomutex_thread_id(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_timer_thread_id_mutex(uint64_t timeout, int num_iterations, clockid_t clockid)
 {
-  uint64_t accumulator = 0;
+  return bench_timer_thread_id(timeout, num_iterations, clockid, true);
+}
 
-  for (int i = 0; i < num_iterations; i++) {
-    bool stop = false; // unsafe
-
-    auto timer_cb = [&]{
-      stop = true;
-    };
-    eval::Timer<decltype(timer_cb)> timer(std::chrono::nanoseconds(timeout), clockid, timer_cb);
-    uint64_t start = clock_gettime_nanos(clockid);
-    while (true) {
-      if (stop)
-        break;
-    }
-    uint64_t end = clock_gettime_nanos(clockid);
-    uint64_t duration = end - start;
-    int64_t overshoot = duration - timeout;
-    accumulator += std::abs(overshoot);
-    // printf("overshoot = %f ms\n", (double)overshoot / 1e6);
-  }
-  return (double)accumulator/num_iterations;
+double bench_timer_thread_id_nomutex(uint64_t timeout, int num_iterations, clockid_t clockid)
+{
+  return bench_timer_thread_id(timeout, num_iterations, clockid, false);
 }
 
 bool stop = false; // unsafe
-void bench_signal_handler(int signo)
+void bench_timer_signal_handler(int signo)
 {
   stop = true;
 }
 
-double bench_signal(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_timer_signal(uint64_t timeout, int num_iterations, clockid_t clockid)
 {
   uint64_t accumulator = 0;
 
   struct sigaction action;
   memset(&action, 0, sizeof(action));
-  action.sa_handler = &bench_signal_handler;
+  action.sa_handler = &bench_timer_signal_handler;
   sigaction(SIGUSR1, &action, NULL);
 
   for (int i = 0; i < num_iterations; i++) {
@@ -147,8 +141,15 @@ int main(int argc, char *argv[])
   const char *clock_names[] = {"CLOCK_REALTIME", "CLOCK_MONOTONIC", "CLOCK_PROCESS_CPUTIME_ID", "CLOCK_THREAD_CPUTIME_ID"};
 
   int num_methods = 3;
-  bench_method_ptr method_ptrs[] = {&bench_mutex_thread_id, &bench_nomutex_thread_id, &bench_signal};
-  const char *method_names[] = {"bench_mutex_thread_id", "bench_nomutex_thread_id", "bench_signal"};
+  bench_method_ptr method_ptrs[] = {
+    &bench_timer_thread_id_mutex,
+    &bench_timer_thread_id_nomutex,
+    &bench_timer_signal};
+  const char *method_names[] = {
+    "bench_timer_thread_id_mutex",
+    "bench_timer_thread_id_nomutex",
+    "bench_timer_signal"
+  };
 
   for (int c = 0; c < num_clocks; c++) {
     printf("%s:\n", clock_names[c]);
