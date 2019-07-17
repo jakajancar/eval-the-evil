@@ -74,18 +74,18 @@ double bench_timer_thread_id_nomutex(uint64_t timeout, int num_iterations, clock
 }
 
 bool stop = false; // unsafe
-void bench_timer_signal_handler(int signo)
+void bench_timer_signal_nomutex_handler(int signo)
 {
   stop = true;
 }
 
-double bench_timer_signal(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_timer_signal_nomutex(uint64_t timeout, int num_iterations, clockid_t clockid)
 {
   uint64_t accumulator = 0;
 
   struct sigaction action;
   memset(&action, 0, sizeof(action));
-  action.sa_handler = &bench_timer_signal_handler;
+  action.sa_handler = &bench_timer_signal_nomutex_handler;
   sigaction(SIGUSR1, &action, NULL);
 
   for (int i = 0; i < num_iterations; i++) {
@@ -130,6 +130,78 @@ double bench_timer_signal(uint64_t timeout, int num_iterations, clockid_t clocki
   return (double)accumulator/num_iterations;
 }
 
+double bench_watchdog_thread(uint64_t timeout, int num_iterations, clockid_t clockid, bool use_mutex)
+{
+  if (clockid != CLOCK_THREAD_CPUTIME_ID)
+    return NAN;
+
+  uint64_t accumulator = 0;
+
+  for (int i = 0; i < num_iterations; i++) {
+    std::mutex stop_mutex;
+    bool stop = false;
+
+    clockid_t main_thread_clockid;
+    if (pthread_getcpuclockid(pthread_self(), &main_thread_clockid) != 0) {
+      std::cout << "pthread_getcpuclockid failed\n";
+      abort();
+    }
+
+    uint64_t deadline = 0;
+    std::thread watchdog([&]{
+      // timespec sleep_duration = timespec{0, 100*1000}; // 0.1ms
+      timespec sleep_duration = timespec{0, 1000*1000}; // 1ms
+      while (true) {
+        // std::cout << "deadline = " << deadline << ", " <<
+        //     "main_thread_clock = " << clock_gettime_nanos(main_thread_clockid) << "\n";
+
+        if (deadline != 0 && clock_gettime_nanos(main_thread_clockid) >= deadline) {
+          if (use_mutex) {
+            std::lock_guard<std::mutex> lock(stop_mutex);
+            stop = true;
+          } else {
+            stop = true;
+          }
+          break;
+        } else {
+          nanosleep(&sleep_duration, NULL);
+        }
+      }
+    });
+
+    uint64_t start = clock_gettime_nanos(clockid);
+    deadline = start + timeout;
+    while (true) {
+      if (use_mutex) {
+        std::lock_guard<std::mutex> lock(stop_mutex);
+        if (stop)
+          break;
+      } else {
+        if (stop)
+          break;
+      }
+    }
+    uint64_t end = clock_gettime_nanos(clockid);
+
+    watchdog.join();
+    uint64_t duration = end - start;
+    int64_t overshoot = duration - timeout;
+    accumulator += std::abs(overshoot);
+    // printf("overshoot = %f ms\n", (double)overshoot / 1e6);
+  }
+  return (double)accumulator/num_iterations;
+}
+
+double bench_watchdog_thread_mutex(uint64_t timeout, int num_iterations, clockid_t clockid)
+{
+  return bench_watchdog_thread(timeout, num_iterations, clockid, true);
+}
+
+double bench_watchdog_thread_nomutex(uint64_t timeout, int num_iterations, clockid_t clockid)
+{
+  return bench_watchdog_thread(timeout, num_iterations, clockid, false);
+}
+
 typedef double(*bench_method_ptr)(uint64_t, int, clockid_t);
 
 int main(int argc, char *argv[])
@@ -140,15 +212,20 @@ int main(int argc, char *argv[])
   clockid_t clock_ids[] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
   const char *clock_names[] = {"CLOCK_REALTIME", "CLOCK_MONOTONIC", "CLOCK_PROCESS_CPUTIME_ID", "CLOCK_THREAD_CPUTIME_ID"};
 
-  int num_methods = 3;
+  int num_methods = 5;
   bench_method_ptr method_ptrs[] = {
     &bench_timer_thread_id_mutex,
     &bench_timer_thread_id_nomutex,
-    &bench_timer_signal};
+    &bench_timer_signal_nomutex,
+    &bench_watchdog_thread_mutex,
+    &bench_watchdog_thread_nomutex
+  };
   const char *method_names[] = {
     "bench_timer_thread_id_mutex",
     "bench_timer_thread_id_nomutex",
-    "bench_timer_signal"
+    "bench_timer_signal_nomutex",
+    "bench_watchdog_thread_mutex",
+    "bench_watchdog_thread_nomutex"
   };
 
   for (int c = 0; c < num_clocks; c++) {
