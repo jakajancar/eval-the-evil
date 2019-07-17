@@ -18,6 +18,7 @@ services:
       - ./LICENSE.md:/root/eval-the-evil/LICENSE.md:ro
     ports:
       - 1101:1101
+    privileged: true # gdb
     working_dir: /root/eval-the-evil
     command: |
       bash -c 'echo "Sleeping forever. Use exec or override command."; sleep infinity'
