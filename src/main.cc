@@ -130,7 +130,7 @@ double bench_timer_signal_nomutex(uint64_t timeout, int num_iterations, clockid_
   return (double)accumulator/num_iterations;
 }
 
-double bench_watchdog_thread(uint64_t timeout, int num_iterations, clockid_t clockid, bool use_mutex)
+double bench_watchdog_thread(uint64_t timeout, int num_iterations, clockid_t clockid, bool use_mutex, long watchdog_interval_nsec)
 {
   if (clockid != CLOCK_THREAD_CPUTIME_ID)
     return NAN;
@@ -149,8 +149,7 @@ double bench_watchdog_thread(uint64_t timeout, int num_iterations, clockid_t clo
 
     uint64_t deadline = 0;
     std::thread watchdog([&]{
-      // timespec sleep_duration = timespec{0, 100*1000}; // 0.1ms
-      timespec sleep_duration = timespec{0, 1000*1000}; // 1ms
+      timespec sleep_duration = timespec{0, watchdog_interval_nsec};
       while (true) {
         // std::cout << "deadline = " << deadline << ", " <<
         //     "main_thread_clock = " << clock_gettime_nanos(main_thread_clockid) << "\n";
@@ -192,14 +191,24 @@ double bench_watchdog_thread(uint64_t timeout, int num_iterations, clockid_t clo
   return (double)accumulator/num_iterations;
 }
 
-double bench_watchdog_thread_mutex(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_watchdog_thread_mutex_1ms(uint64_t timeout, int num_iterations, clockid_t clockid)
 {
-  return bench_watchdog_thread(timeout, num_iterations, clockid, true);
+  return bench_watchdog_thread(timeout, num_iterations, clockid, true, 1000*1000);
 }
 
-double bench_watchdog_thread_nomutex(uint64_t timeout, int num_iterations, clockid_t clockid)
+double bench_watchdog_thread_nomutex_1ms(uint64_t timeout, int num_iterations, clockid_t clockid)
 {
-  return bench_watchdog_thread(timeout, num_iterations, clockid, false);
+  return bench_watchdog_thread(timeout, num_iterations, clockid, false, 1000*1000);
+}
+
+double bench_watchdog_thread_mutex_100us(uint64_t timeout, int num_iterations, clockid_t clockid)
+{
+  return bench_watchdog_thread(timeout, num_iterations, clockid, true, 100*1000);
+}
+
+double bench_watchdog_thread_nomutex_100us(uint64_t timeout, int num_iterations, clockid_t clockid)
+{
+  return bench_watchdog_thread(timeout, num_iterations, clockid, false, 100*1000);
 }
 
 typedef double(*bench_method_ptr)(uint64_t, int, clockid_t);
@@ -212,20 +221,24 @@ int main(int argc, char *argv[])
   clockid_t clock_ids[] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
   const char *clock_names[] = {"CLOCK_REALTIME", "CLOCK_MONOTONIC", "CLOCK_PROCESS_CPUTIME_ID", "CLOCK_THREAD_CPUTIME_ID"};
 
-  int num_methods = 5;
+  int num_methods = 7;
   bench_method_ptr method_ptrs[] = {
     &bench_timer_thread_id_mutex,
     &bench_timer_thread_id_nomutex,
     &bench_timer_signal_nomutex,
-    &bench_watchdog_thread_mutex,
-    &bench_watchdog_thread_nomutex
+    &bench_watchdog_thread_mutex_1ms,
+    &bench_watchdog_thread_nomutex_1ms,
+    &bench_watchdog_thread_mutex_100us,
+    &bench_watchdog_thread_nomutex_100us
   };
   const char *method_names[] = {
     "bench_timer_thread_id_mutex",
     "bench_timer_thread_id_nomutex",
     "bench_timer_signal_nomutex",
-    "bench_watchdog_thread_mutex",
-    "bench_watchdog_thread_nomutex"
+    "bench_watchdog_thread_mutex_1ms",
+    "bench_watchdog_thread_nomutex_1ms",
+    "bench_watchdog_thread_mutex_100us",
+    "bench_watchdog_thread_nomutex_100us"
   };
 
   for (int c = 0; c < num_clocks; c++) {
