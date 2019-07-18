@@ -3,13 +3,20 @@
 #include <assert.h>
 #include <libplatform/libplatform.h>
 #include <v8.h>
-#include "timer.h"
 #include "time.h"
 #include <atomic>
 #include <stdexcept>
 #include "error-handling.h"
 
 namespace eval {
+
+uint64_t clock_gettime_nanos(clockid_t clockid)
+{
+  struct timespec time;
+  if (clock_gettime(clockid, &time) != 0)
+    throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
+  return time.tv_sec * 1e9 + time.tv_nsec;
+}
 
 class GlobalContext {
   private:
@@ -52,6 +59,17 @@ class ThreadContext {
     v8::Isolate *isolate;
     v8::Isolate::Scope isolate_scope;
     v8::HandleScope handle_scope;
+
+    enum class WatchdogStatus { disabled, should_watch, triggered, should_exit };
+    std::mutex              watchdog_mutex;
+    std::condition_variable watchdog_cv;
+    WatchdogStatus          watchdog_status = WatchdogStatus::disabled;
+    uint64_t                watchdog_deadline;
+    std::thread             watchdog_thread;
+
+    bool heap_limit_enabled = false;
+    bool heap_limit_exceeded = false;
+
     // We use a separate context for serializing our JSON responses, because
     // we don't want toJSON() or some other weirdness breaking the protocol.
     v8::Local<v8::Context> response_context;
@@ -69,47 +87,84 @@ class ThreadContext {
       return std::unique_ptr<v8::Isolate, IsolateDeleter>(v8::Isolate::New(create_params));
     }
 
+    static std::thread create_watchdog(v8::Isolate *isolate,
+        std::mutex &mutex,
+        std::condition_variable &cv,
+        WatchdogStatus &status,
+        uint64_t &deadline)
+    {
+        clockid_t main_thread_cpu_clockid;
+        if (pthread_getcpuclockid(pthread_self(), &main_thread_cpu_clockid) != 0)
+          throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get clock id"));
+
+        return std::thread([&, isolate, main_thread_cpu_clockid]{
+          std::chrono::nanoseconds next_check = std::chrono::hours(1);
+          while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait_for(lock, next_check);
+            // after the wait, we own the lock.
+
+            switch (status) {
+              case WatchdogStatus::disabled:
+              case WatchdogStatus::triggered:
+                next_check = std::chrono::hours(1);
+                break;
+              case WatchdogStatus::should_exit:
+                return;
+              case WatchdogStatus::should_watch:
+                uint64_t main_thread_cpu_time = clock_gettime_nanos(main_thread_cpu_clockid);
+                if (main_thread_cpu_time > deadline) {
+                  isolate->TerminateExecution();
+                  status = WatchdogStatus::triggered;
+                } else {
+                  next_check = std::chrono::nanoseconds(deadline - main_thread_cpu_time);
+                }
+            }
+          }
+        });
+    }
+
   public:
     ThreadContext() :
         isolate_owning(create_isolate(&allocator)),
         isolate(isolate_owning.get()),
         isolate_scope(isolate),
         handle_scope(isolate),
+        watchdog_thread(create_watchdog(isolate, watchdog_mutex, watchdog_cv, watchdog_status, watchdog_deadline)),
         response_context(v8::Context::New(isolate))
     {
+      isolate->SetData(1, this);
+
       isolate->SetFatalErrorHandler([](const char *location, const char *message) {
+        ThreadContext *self = static_cast<ThreadContext *>(v8::Isolate::GetCurrent()->GetData(1));
+        assert(self != nullptr);
+
         std::stringstream stream;
         stream << "V8 fatal error: " << message << " (in " << location << ")";
         throw_with_trace(std::runtime_error(stream.str()));
       });
+
+      isolate->AddNearHeapLimitCallback([](void *data, size_t current_heap_limit, size_t initial_heap_limit)
+      {
+        ThreadContext *self = static_cast<ThreadContext *>(v8::Isolate::GetCurrent()->GetData(1));
+        assert(self != nullptr);
+
+        if (self->heap_limit_enabled) {
+          self->heap_limit_exceeded = true;
+          self->isolate->TerminateExecution();
+        }
+        return current_heap_limit;
+      }, NULL);
     }
 
     ~ThreadContext()
     {
-    }
-};
-
-template<typename Callback>
-class NearHeapLimitCallbackScope
-{
-  friend class RequestContext;
-  private:
-    v8::Isolate *isolate;
-    const Callback &callback;
-    NearHeapLimitCallbackScope(v8::Isolate *isolate, const Callback &callback): isolate(isolate), callback(callback)
-    {
-      isolate->AddNearHeapLimitCallback(wrapper, this);
-    }
-
-    ~NearHeapLimitCallbackScope()
-    {
-      isolate->RemoveNearHeapLimitCallback(wrapper, 0);
-    }
-
-    static size_t wrapper(void *data, size_t current_heap_limit, size_t initial_heap_limit)
-    {
-      static_cast<NearHeapLimitCallbackScope*>(data)->callback();
-      return current_heap_limit;
+      {
+        std::lock_guard<std::mutex> lock(watchdog_mutex);
+        watchdog_status = WatchdogStatus::should_exit;
+        watchdog_cv.notify_all();
+      }
+      watchdog_thread.join();
     }
 };
 
@@ -180,12 +235,15 @@ class RequestContext {
         request_code = v8::Local<v8::String>::Cast(request_code_value);
 
         v8::Local<v8::Value> timeout_value = request_object->Get(user_context, v8_istr("timeout")).ToLocalChecked();
-        if (timeout_value->IsUndefined())
+        if (timeout_value->IsUndefined()) {
           timeout_millis = 10;
-        else if (timeout_value->IsUint32())
+        } else if (timeout_value->IsUint32()) {
           timeout_millis = v8::Local<v8::Uint32>::Cast(timeout_value)->Value();
-        else
-          return error_response("bad_request", v8_istr("'timeout' parameter must be a non-negative integer."));
+          if (timeout_millis == 0)
+            return error_response("bad_request", v8_istr("'timeout' parameter must be a positive integer."));
+        } else {
+          return error_response("bad_request", v8_istr("'timeout' parameter must be a positive integer."));
+        }
       }
 
       // Prepare the source code.
@@ -202,41 +260,49 @@ class RequestContext {
       if (!v8::ScriptCompiler::CompileFunctionInContext(user_context, &source, 0, {}, 2, context_extensions).ToLocal(&function))
         return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
 
-      // Resource-constrained execution scope for user-defined code
-      std::atomic<bool> over_memory(false);
-      std::atomic<bool> over_cpu(false);
-      bool success = false;
-      v8::Local<v8::String> retval_stringified;
-      uint32_t time = 0;
+      // Run user code
+      // 1. Set memory limit
+      thread->heap_limit_enabled = true;
+      thread->heap_limit_exceeded = false;
+
+      // 2. Set CPU limit
+      const uint64_t start = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
       {
-        auto oom_callback = [&]() {
-          over_memory.store(true);
-          thread->isolate->TerminateExecution();
-        };
-        NearHeapLimitCallbackScope<decltype(oom_callback)> oom_scope(thread->isolate, oom_callback);
-
-        auto cpu_callback = [&]{
-          over_cpu.store(true);
-          thread->isolate->TerminateExecution();
-        };
-        Timer<decltype(cpu_callback)> timer(std::chrono::milliseconds(timeout_millis), CLOCK_THREAD_CPUTIME_ID, cpu_callback);
-
-        const uint64_t start = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
-        v8::Local<v8::Value> retval;
-        if (
-            function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) &&
-            v8::JSON::Stringify(user_context, retval).ToLocal(&retval_stringified)
-        ) {
-          success = true;
-        }
-        const uint64_t end = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
-        time = (end - start) / 1e6;
+        std::lock_guard<std::mutex> lock(thread->watchdog_mutex);
+        assert(thread->watchdog_status == ThreadContext::WatchdogStatus::disabled);
+        thread->watchdog_status = ThreadContext::WatchdogStatus::should_watch;
+        thread->watchdog_deadline = start + timeout_millis * 1e6;
+        thread->watchdog_cv.notify_all();
       }
+
+      // 3. Run
+      v8::Local<v8::Value> retval;
+      v8::Local<v8::String> retval_stringified;
+      bool success = function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) &&
+                     v8::JSON::Stringify(user_context, retval).ToLocal(&retval_stringified);
+      const uint64_t end = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
+
+      // 4. Unset CPU limit (watchdog may still fire until this is finished)
+      bool over_cpu;
+      {
+        std::lock_guard<std::mutex> lock(thread->watchdog_mutex);
+        switch (thread->watchdog_status) {
+          case ThreadContext::WatchdogStatus::should_watch: over_cpu = false; break;
+          case ThreadContext::WatchdogStatus::triggered:    over_cpu = true; break;
+          default: throw_with_trace(std::runtime_error("Unexpected watchdog status"));
+        }
+        thread->watchdog_status = ThreadContext::WatchdogStatus::disabled;
+      }
+
+      // 5. Unset memory limit
+      thread->heap_limit_enabled = false;
+
+      // Prepare response
       if (thread->isolate->IsExecutionTerminating()) {
         thread->isolate->CancelTerminateExecution();
-        if (over_memory.load())
+        if (thread->heap_limit_exceeded)
           return error_response("code_error", v8_istr("Memory limit exceeded."));
-        else if (over_cpu.load())
+        else if (over_cpu)
           return error_response("code_error", v8_istr("CPU time limit exceeded."));
         else
           throw_with_trace(std::runtime_error("Execution terminating but neither over memory or cpu time limits?"));
@@ -254,6 +320,7 @@ class RequestContext {
           retval_stringified = v8_istr("null");
       }
 
+      uint32_t time = (end - start) / 1e6;
       return success_response(retval_stringified, time);
     }
 
@@ -322,15 +389,6 @@ class RequestContext {
         buf = v8::String::Concat(thread->isolate, buf, parts[i]);
       return buf;
     }
-
-    uint64_t clock_gettime_nanos(clockid_t clockid)
-    {
-      struct timespec time;
-      if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) != 0)
-        throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
-      return time.tv_sec * 1e9 + time.tv_nsec;
-    }
-
 };
 
 }

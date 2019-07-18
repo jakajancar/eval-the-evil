@@ -70,10 +70,10 @@ async function main() {
                 assert.supersetStrictEqual(await call({code: ''}), {status: 'bad_request', detail: "Missing 'context' parameter or it is not an object."});
             });
 
-            await group(`Returns correct error if timeout is not a non-negative integer`, async () => {
-                for (value of ["hello world", -1, true, null, {}, [], 1.1]) {
+            await group(`Returns correct error if timeout is not a positive integer`, async () => {
+                for (value of ["hello world", -1, true, null, {}, [], 1.1, 0]) {
                     await test(JSON.stringify(value), async () => {
-                        assert.supersetStrictEqual(await call({code: '', context: {}, timeout: value}), {status: 'bad_request', detail: "'timeout' parameter must be a non-negative integer."});
+                        assert.supersetStrictEqual(await call({code: '', context: {}, timeout: value}), {status: 'bad_request', detail: "'timeout' parameter must be a positive integer."});
                     });
                 }
             });
@@ -218,7 +218,8 @@ async function main() {
         await group('Resource constraints', async () => {
             await group('CPU time', async () => {
                 // Note that this busy waits for `duration` in real time, whereas the
-                // process measures in CPU time. The tests will fail if system is loaded.
+                // process measures in CPU time. The tests will fail if system is loaded,
+                // since CPU time may be less.
                 const BUSY_WAIT_CODE = `const start = +new Date; while (+new Date <= start + duration) { /* busy wait */ }`;
 
                 await group('Execution time measurement is accurate within 1 ms + 5%', async () => {
@@ -229,8 +230,8 @@ async function main() {
                         const min = Math.max(duration - tolerance, 0);
                         const max = duration + tolerance;
                         await test(`${duration} ms busy wait should take ${min}-${max} ms`, async () => {
-                            const response = await call({code: BUSY_WAIT_CODE, context: {duration}, timeout: duration*10});
-                            assert.equal(response.status, 'success');
+                            const response = await call({code: BUSY_WAIT_CODE, context: {duration}, timeout: 10000});
+                            assert.equal(response.status, 'success', JSON.stringify(response));
                             process.stdout.write(` [was ${response.time}]`);
                             assert(min <= response.time && response.time <= max);
                         });
@@ -246,11 +247,11 @@ async function main() {
                     }
                 });
 
-                // Unfortunately, this is fairly low-resolution :/
-                await group(`Terminated if 10 ms above limit`, async () => {
+                await group(`Terminated if max(1 ms, 5%) above limit`, async () => {
                     for (const limit of [1, 5, 10, 50, 100]) {
-                        await test(`${limit} ms limit`, async () => {
-                            const response = await call({code: BUSY_WAIT_CODE, context: {duration: limit + 10}, timeout: limit});
+                        const duration = limit + Math.max(1, Math.ceil(0.05*limit));
+                        await test(`${duration} ms busy wait should get preempted with ${limit} ms limit`, async () => {
+                            const response = await call({code: BUSY_WAIT_CODE, context: {duration}, timeout: limit});
                             assert.equal(response.status, 'code_error');
                             assert(response.detail.indexOf('CPU time limit exceeded') !== -1, `Received detail: ${response.detail}`);
                         });
