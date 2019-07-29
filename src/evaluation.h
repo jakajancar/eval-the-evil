@@ -10,14 +10,6 @@
 
 namespace eval {
 
-uint64_t clock_gettime_nanos(clockid_t clockid)
-{
-  struct timespec time;
-  if (clock_gettime(clockid, &time) != 0)
-    throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
-  return time.tv_sec * 1e9 + time.tv_nsec;
-}
-
 class GlobalContext {
   private:
     std::unique_ptr<v8::Platform> platform;
@@ -43,6 +35,7 @@ class VeryBadArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
     void Free(void* data, size_t) override { }
 };
 
+typedef uint64_t (*UsedCpuTimeCallback)(void *data);
 class CpuWatchdog {
   private:
     v8::Isolate *isolate;
@@ -50,15 +43,13 @@ class CpuWatchdog {
     std::mutex mutex;
     std::condition_variable cv;
     Status status = Status::disabled;
-    uint64_t deadline;
+    UsedCpuTimeCallback used_cpu_time_callback;
+    void *used_cpu_time_callback_data;
+    uint64_t limit;
     std::thread thread;
 
-    void thread_main(pthread_t main_thread)
+    void thread_main()
     {
-      clockid_t main_thread_cpu_clockid;
-      if (pthread_getcpuclockid(main_thread, &main_thread_cpu_clockid) != 0)
-        throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get clock id"));
-
       std::chrono::nanoseconds next_check = std::chrono::hours(1);
       while (true) {
         std::unique_lock<std::mutex> lock(this->mutex);
@@ -72,12 +63,12 @@ class CpuWatchdog {
           case Status::should_exit:
             return;
           case Status::should_watch:
-            uint64_t main_thread_cpu_time = clock_gettime_nanos(main_thread_cpu_clockid);
-            if (main_thread_cpu_time > this->deadline) {
+            uint64_t used_cpu_time = (*used_cpu_time_callback)(used_cpu_time_callback_data);
+            if (used_cpu_time >= this->limit) {
               this->isolate->TerminateExecution();
               this->status = Status::triggered;
             } else {
-              next_check = std::chrono::nanoseconds(this->deadline - main_thread_cpu_time);
+              next_check = std::chrono::nanoseconds(this->limit - used_cpu_time);
             }
         }
       }
@@ -86,16 +77,18 @@ class CpuWatchdog {
   public:
     CpuWatchdog(v8::Isolate *isolate):
         isolate(isolate),
-        thread(std::thread(&CpuWatchdog::thread_main, this, pthread_self()))
+        thread(std::thread(&CpuWatchdog::thread_main, this))
     {
     }
 
-    void arm(uint64_t deadline)
+    void arm(uint64_t limit, UsedCpuTimeCallback used_cpu_time_callback, void *used_cpu_time_callback_data)
     {
       std::lock_guard<std::mutex> lock(mutex);
       assert(status == Status::disabled);
       status = Status::should_watch;
-      this->deadline = deadline;
+      this->used_cpu_time_callback = used_cpu_time_callback;
+      this->used_cpu_time_callback_data = used_cpu_time_callback_data;
+      this->limit = limit;
       cv.notify_all();
     }
 
@@ -109,6 +102,8 @@ class CpuWatchdog {
         default: throw_with_trace(std::runtime_error("Unexpected watchdog status"));
       }
       status = Status::disabled;
+      this->used_cpu_time_callback = nullptr;
+      this->used_cpu_time_callback_data = nullptr;
       return fired;
     }
 
@@ -134,12 +129,15 @@ class ThreadContext {
       void operator()(v8::Isolate* isolate) const { isolate->Dispose(); }
     };
 
+    clockid_t clockid;
     VeryBadArrayBufferAllocator allocator;
     std::unique_ptr<v8::Isolate, IsolateDeleter> isolate_owning;
     v8::Isolate *isolate;
     v8::Isolate::Scope isolate_scope;
     v8::HandleScope handle_scope;
     CpuWatchdog cpu_watchdog;
+    uint64_t current_gc_start = 0;
+    uint64_t gc_total = 0;
     bool heap_limit_enabled = false;
     bool heap_limit_exceeded = false;
 
@@ -169,6 +167,9 @@ class ThreadContext {
         cpu_watchdog(isolate),
         response_context(v8::Context::New(isolate))
     {
+      if (pthread_getcpuclockid(pthread_self(), &(this->clockid)) != 0)
+        throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get clock id"));
+
       isolate->SetData(1, this);
 
       isolate->SetFatalErrorHandler([](const char *location, const char *message) {
@@ -180,8 +181,25 @@ class ThreadContext {
         throw_with_trace(std::runtime_error(stream.str()));
       });
 
-      isolate->AddNearHeapLimitCallback([](void *data, size_t current_heap_limit, size_t initial_heap_limit)
-      {
+      isolate->AddGCPrologueCallback([](v8::Isolate *isolate, v8::GCType type, v8::GCCallbackFlags flags) {
+        ThreadContext *self = static_cast<ThreadContext *>(v8::Isolate::GetCurrent()->GetData(1));
+        assert(self != nullptr);
+
+        assert(self->current_gc_start == 0);
+        self->current_gc_start = self->current_cpu_time();
+      });
+
+      isolate->AddGCEpilogueCallback([](v8::Isolate *isolate, v8::GCType type, v8::GCCallbackFlags flags) {
+        ThreadContext *self = static_cast<ThreadContext *>(v8::Isolate::GetCurrent()->GetData(1));
+        assert(self != nullptr);
+
+        assert(self->current_gc_start != 0);
+        uint64_t now = self->current_cpu_time();
+        self->gc_total += now - self->current_gc_start;
+        self->current_gc_start = 0;
+      });
+
+      isolate->AddNearHeapLimitCallback([](void *data, size_t current_heap_limit, size_t initial_heap_limit) {
         ThreadContext *self = static_cast<ThreadContext *>(v8::Isolate::GetCurrent()->GetData(1));
         assert(self != nullptr);
 
@@ -191,11 +209,21 @@ class ThreadContext {
         }
         return current_heap_limit;
       }, NULL);
+
     }
 
     ~ThreadContext()
     {
     }
+
+    uint64_t current_cpu_time()
+    {
+      struct timespec time;
+      if (clock_gettime(clockid, &time) != 0)
+        throw_with_trace(std::system_error(errno, std::generic_category(), "Cannot get time"));
+      return time.tv_sec * 1e9 + time.tv_nsec;
+    }
+
 };
 
 class RequestContext {
@@ -203,6 +231,8 @@ class RequestContext {
     ThreadContext *thread;
     v8::HandleScope handle_scope;
     v8::Local<v8::Context> user_context;
+    uint64_t start = 0;
+    uint64_t gc_total_at_start = 0;
     std::unique_ptr<v8::String::Utf8Value> response_utf8;
 
   public:
@@ -211,6 +241,7 @@ class RequestContext {
         handle_scope(thread->isolate),
         user_context(v8::Context::New(thread->isolate))
     {
+      user_context->SetAlignedPointerInEmbedderData(1, this);
     }
 
     ~RequestContext()
@@ -228,9 +259,16 @@ class RequestContext {
     }
 
   private:
+    // Called from watchdog thread as well.
+    uint64_t used_cpu_time()
+    {
+      uint64_t now = thread->current_gc_start ? thread->current_gc_start : this->thread->current_cpu_time();
+      return now - start - (thread->gc_total - gc_total_at_start);
+    }
+
     v8::Local<v8::String> handle_request_string(const char *request_blob)
     {
-      assert(response_utf8 == NULL); // Another request already contaminated this RequestContext, create a new one.
+      assert(start == 0); // Another request already contaminated this RequestContext, create a new one.
 
       v8::Context::Scope context_scope(user_context);
       v8::TryCatch try_catch(thread->isolate);
@@ -282,7 +320,15 @@ class RequestContext {
 
       // Prepare the implicit context.
       v8::Local<v8::Object> implicit_context = v8::Object::New(thread->isolate);
+      // todo move into ctor
       implicit_context->Set(user_context, v8_istr("global"), user_context->Global()).ToChecked();
+      bool tmp = implicit_context->SetNativeDataProperty(user_context, v8_istr("cputime"), [](v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8::Value> &info) {
+        v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
+        RequestContext *request_context = static_cast<RequestContext *>(context->GetAlignedPointerFromEmbedderData(1));
+        uint32_t used_time_ms = (request_context->used_cpu_time() + 1e6 - 1) / 1e6;
+        info.GetReturnValue().Set(used_time_ms);
+      }).ToChecked();
+      assert(tmp == true);
 
       // Compile the source code with the implicit and user-provided contexts.
       v8::Local<v8::Object> context_extensions[] = {implicit_context, request_context};
@@ -296,18 +342,24 @@ class RequestContext {
       thread->heap_limit_exceeded = false;
 
       // 2. Set CPU limit
-      const uint64_t start = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
-      thread->cpu_watchdog.arm(start + timeout_millis * 1e6);
+      this->start = thread->current_cpu_time();
+      this->gc_total_at_start = thread->gc_total;
+      thread->cpu_watchdog.arm(timeout_millis * 1e6, [](void *data){
+        RequestContext *self = static_cast<RequestContext *>(data);
+        return self->used_cpu_time();
+      }, this);
 
       // 3. Run
       v8::Local<v8::Value> retval;
       v8::Local<v8::String> retval_stringified;
       bool success = function->Call(user_context, user_context->Global(), 0, {}).ToLocal(&retval) &&
                      v8::JSON::Stringify(user_context, retval).ToLocal(&retval_stringified);
-      const uint64_t end = clock_gettime_nanos(CLOCK_THREAD_CPUTIME_ID);
+      uint64_t used_time = this->used_cpu_time();
 
       // 4. Unset CPU limit (watchdog may still fire until this is finished)
       bool over_cpu = thread->cpu_watchdog.disarm();
+      if (over_cpu)
+        assert(used_cpu_time() >= timeout_millis * 1e6);
 
       // 5. Unset memory limit
       thread->heap_limit_enabled = false;
@@ -315,12 +367,17 @@ class RequestContext {
       // Prepare response
       if (thread->isolate->IsExecutionTerminating()) {
         thread->isolate->CancelTerminateExecution();
-        if (thread->heap_limit_exceeded)
+        if (thread->heap_limit_exceeded) {
           return error_response("code_error", v8_istr("Memory limit exceeded."));
-        else if (over_cpu)
-          return error_response("code_error", v8_istr("CPU time limit exceeded."));
-        else
+        } else if (over_cpu) {
+          std::stringstream detail;
+          detail << "CPU time limit exceeded (limit " << timeout_millis << " ms, "
+                 << "used " << used_time / 1e6 << " ms, "
+                 << "plus " << (this->thread->gc_total - this->gc_total_at_start) / 1e6 << " ms for gc).";
+          return error_response("code_error", v8_str(detail.str().c_str()));
+        } else {
           throw_with_trace(std::runtime_error("Execution terminating but neither over memory or cpu time limits?"));
+        }
       } else if (!success) {
         return error_response("code_error", trycatch_to_detail(user_context, &try_catch));
       } else if (retval_stringified.IsEmpty()) {
@@ -335,19 +392,20 @@ class RequestContext {
           retval_stringified = v8_istr("null");
       }
 
-      uint32_t time = (end - start) / 1e6;
-      return success_response(retval_stringified, time);
+      return success_response(retval_stringified, used_time);
     }
 
     /* Response generation */
 
-    v8::Local<v8::String> success_response(v8::Local<v8::String> retval, uint32_t time)
+    v8::Local<v8::String> success_response(v8::Local<v8::String> retval, uint64_t time)
     {
       v8::Local<v8::Context> response_context = thread->response_context;
       v8::Context::Scope context_scope(response_context);
 
+      uint32_t time_ms = (time + 1e6 - 1) / 1e6;
+
       std::stringstream time_string;
-      time_string << time;
+      time_string << time_ms;
 
       return v8_concat({ v8_istr("{\"status\":\"success\",\"return_value\":"), retval, v8_istr(",\"time\":"), v8_str(time_string.str().c_str()), v8_istr("}") });
     }
