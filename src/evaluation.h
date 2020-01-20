@@ -17,6 +17,10 @@ class GlobalContext {
   public:
     GlobalContext()
     {
+      constexpr char kFlags[] =
+        "--no-expose-wasm ";
+      v8::V8::SetFlagsFromString(kFlags, sizeof(kFlags));
+
       platform = v8::platform::NewDefaultPlatform();
       v8::V8::InitializePlatform(platform.get());
       v8::V8::Initialize();

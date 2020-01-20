@@ -112,6 +112,12 @@ async function main() {
                     assert.supersetStrictEqual(await call({code: `return new Intl.DateTimeFormat('es', { month: 'long' }).format(new Date(9e8));`, context: {}}), {status: 'success', return_value: 'enero'});
                 }
             });
+
+            await test(`WebAssembly is disabled`, async() => {
+                // Needlessly increasing attack surface. Useful to exploits:
+                // https://abiondo.me/2019/01/02/exploiting-math-expm1-v8/
+                assert.supersetStrictEqual(await call({code: `return typeof WebAssembly;`, context: {}}), {status: 'success', return_value: 'undefined'});
+            });
         });
 
         await group(`Code error handling`, async () => {
