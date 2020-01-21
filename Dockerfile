@@ -22,7 +22,7 @@ RUN gclient
 # API changes: https://docs.google.com/document/d/1g8JFi8T_oAE_7uAri7Njtig7fKaPDfotU6huOa1alds
 RUN mkdir /root/v8
 RUN cd /root/v8 && fetch v8
-RUN cd /root/v8/v8 && git checkout tags/7.8.279.17
+RUN cd /root/v8/v8 && git checkout tags/7.9.317.33
 RUN cd /root/v8/v8 && gclient sync
 
 # Prepare config and build
